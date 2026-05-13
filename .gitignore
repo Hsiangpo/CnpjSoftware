@@ -1,0 +1,13 @@
+.env
+.codex/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+tmp/
+cnpj/
+output/
+dist/
+build/
+*.egg-info/
+node_modules/
