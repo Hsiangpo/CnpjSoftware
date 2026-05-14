@@ -36,7 +36,7 @@ class CnpjBizBrowserClient:
         timeout_seconds: float = 25,
         challenge_wait_seconds: float = 8,
         max_retries: int = 2,
-        executable_path: str = "/usr/bin/google-chrome",
+        executable_path: str | None = None,
         headless: bool = True,
     ) -> None:
         self.proxy_configs = list(proxy_configs or [])
@@ -44,7 +44,7 @@ class CnpjBizBrowserClient:
         self.timeout_seconds = timeout_seconds
         self.challenge_wait_seconds = challenge_wait_seconds
         self.max_retries = max(1, int(max_retries or 1))
-        self.executable_path = executable_path
+        self.executable_path = (executable_path or "").strip()
         self.headless = headless
         self._local = threading.local()
         self._lock = threading.Lock()
@@ -79,10 +79,9 @@ class CnpjBizBrowserClient:
         playwright = None
         browser = None
         context = None
-        launch_kwargs: dict[str, Any] = {
-            "headless": self.headless,
-            "executable_path": self.executable_path,
-        }
+        launch_kwargs: dict[str, Any] = {"headless": self.headless}
+        if self.executable_path:
+            launch_kwargs["executable_path"] = self.executable_path
         session_id = uuid.uuid4().hex[:8]
         if self.proxy_configs:
             config = self.proxy_configs[index % len(self.proxy_configs)]

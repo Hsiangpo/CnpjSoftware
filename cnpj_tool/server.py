@@ -429,6 +429,21 @@ def create_app(auto_run_jobs: bool = True) -> FastAPI:
         analyzer = get_or_build_analyzer(app)
         job = app.state.jobs.get(job_id)
 
+        def materialize_current_output() -> None:
+            current_job = app.state.jobs.get(job_id)
+            if not current_job.upload_id or not current_job.output_path:
+                return
+            full_results = get_checkpoint_store(app).load_results(current_job.upload_id)
+            if not full_results:
+                return
+            output_path = get_checkpoint_store(app).materialize_output(
+                upload_id=current_job.upload_id,
+                filename=current_job.filename or current_job.source_name or current_job.job_id,
+                output_path=Path(current_job.output_path),
+                results=full_results,
+            )
+            app.state.jobs.set_output_path(job_id, str(output_path))
+
         def persist_result(result: BatchResult) -> None:
             if not job.upload_id:
                 return
@@ -438,19 +453,13 @@ def create_app(auto_run_jobs: bool = True) -> FastAPI:
                 input_cnpjs=job.input_cnpjs,
                 result=result,
             )
+            try:
+                materialize_current_output()
+            except Exception:
+                pass
 
         app.state.jobs.run(job_id, analyzer.analyze_many, on_result=persist_result)
-        completed_job = app.state.jobs.get(job_id)
-        if completed_job.upload_id and completed_job.output_path:
-            settings = load_settings()
-            full_results = get_checkpoint_store(app).load_results(completed_job.upload_id)
-            output_path = get_checkpoint_store(app).materialize_output(
-                upload_id=completed_job.upload_id,
-                filename=completed_job.filename or completed_job.source_name or completed_job.job_id,
-                output_path=Path(completed_job.output_path),
-                results=full_results,
-            )
-            app.state.jobs.set_output_path(job_id, str(output_path))
+        materialize_current_output()
 
     @app.post("/api/jobs")
     def create_job(request: JobRequest, background_tasks: BackgroundTasks) -> dict[str, Any]:

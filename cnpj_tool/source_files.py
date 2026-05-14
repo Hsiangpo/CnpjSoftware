@@ -107,7 +107,7 @@ def list_source_files(root: Path, checkpoints: CheckpointStore, output_root: Pat
 def list_output_files(root: Path) -> list[dict]:
     root.mkdir(parents=True, exist_ok=True)
     files = []
-    for path in sorted(root.iterdir(), key=lambda item: item.stat().st_mtime, reverse=True):
+    for path in sorted(root.iterdir(), key=lambda item: (item.stat().st_mtime, item.name.casefold()), reverse=True):
         if not path.is_file():
             continue
         files.append(

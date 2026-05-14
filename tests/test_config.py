@@ -1,3 +1,4 @@
+import cnpj_tool.config as config_module
 from cnpj_tool.config import load_settings
 
 
@@ -65,3 +66,11 @@ def test_load_settings_parses_cnpjbiz_browser_identity(tmp_path, monkeypatch):
     settings = load_settings()
 
     assert settings.cnpj_biz_user_agent == "Mozilla/5.0 Chrome/146"
+
+
+def test_project_root_uses_exe_directory_when_frozen(tmp_path, monkeypatch):
+    exe_path = tmp_path / "CnpjResponsavelTool.exe"
+    monkeypatch.setattr(config_module.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(config_module.sys, "executable", str(exe_path))
+
+    assert config_module.project_root() == tmp_path

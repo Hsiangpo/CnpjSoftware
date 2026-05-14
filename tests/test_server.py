@@ -303,6 +303,92 @@ def test_directory_backed_job_writes_enriched_output_file(tmp_path, monkeypatch)
     assert "Maria Teste" in row_values
 
 
+def test_directory_backed_job_materializes_output_after_each_result(tmp_path, monkeypatch):
+    input_dir = tmp_path / "cnpj"
+    output_dir = tmp_path / "output"
+    checkpoint_dir = tmp_path / "checkpoints"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    checkpoint_dir.mkdir()
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "batch1"
+    sheet.append(["Company", "CNPJ"])
+    sheet.append(["Empresa Um", "03.541.629/0001-37"])
+    sheet.append(["Empresa Dois", "21.746.991/0001-26"])
+    source_path = input_dir / "sample.xlsx"
+    output_path = output_dir / "sample-responsaveis.xlsx"
+    workbook.save(source_path)
+    workbook.close()
+    monkeypatch.setenv("CNPJ_TOOL_INPUT_DIR", str(input_dir))
+    monkeypatch.setenv("CNPJ_TOOL_OUTPUT_DIR", str(output_dir))
+    monkeypatch.setenv("CNPJ_TOOL_CHECKPOINT_DIR", str(checkpoint_dir))
+    observations = []
+
+    class StreamingAnalyzer:
+        def analyze_many(self, cnpjs, existing_results=None, on_result=None, should_stop=None):
+            first = BatchResult(
+                input_cnpj="03.541.629/0001-37",
+                normalized_cnpj="03541629000137",
+                status="success",
+                company=CompanyData(
+                    cnpj="03541629000137",
+                    formatted_cnpj="03.541.629/0001-37",
+                    url="https://cnpj.biz/03541629000137",
+                    legal_name="Empresa Um LTDA",
+                ),
+                responsible=ResponsibleResult(
+                    names=["Maria Streaming"],
+                    role="Socio-Administrador",
+                    confidence=0.91,
+                    reasoning="rule",
+                    analysis_source="rule_fallback",
+                ),
+            )
+            assert on_result is not None
+            on_result(first)
+            assert output_path.exists()
+            partial_workbook = load_workbook(output_path)
+            partial_sheet = partial_workbook["batch1"]
+            partial_row_values = [
+                partial_sheet.cell(row=2, column=index).value
+                for index in range(1, partial_sheet.max_column + 1)
+            ]
+            partial_workbook.close()
+            observations.append(partial_row_values)
+
+            second = BatchResult(
+                input_cnpj="21.746.991/0001-26",
+                normalized_cnpj="21746991000126",
+                status="success",
+                company=CompanyData(
+                    cnpj="21746991000126",
+                    formatted_cnpj="21.746.991/0001-26",
+                    url="https://cnpj.biz/21746991000126",
+                    legal_name="Empresa Dois LTDA",
+                ),
+                responsible=ResponsibleResult(
+                    names=["Joao Streaming"],
+                    role="Diretor",
+                    confidence=0.91,
+                    reasoning="rule",
+                    analysis_source="rule_fallback",
+                ),
+            )
+            on_result(second)
+            return [first, second]
+
+    monkeypatch.setattr(server_module, "build_analyzer", lambda: StreamingAnalyzer())
+
+    client = TestClient(create_app())
+    created = client.post("/api/jobs", json={"source_name": "sample.xlsx"})
+
+    assert created.status_code == 200
+    assert observations
+    assert "Maria Streaming" in observations[0]
+    assert output_path.exists()
+
+
 def test_retry_failed_endpoint_creates_retry_job_with_failed_cnpjs(tmp_path, monkeypatch):
     input_dir = tmp_path / "cnpj"
     output_dir = tmp_path / "output"

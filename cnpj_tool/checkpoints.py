@@ -4,6 +4,7 @@ import hashlib
 import json
 import threading
 import time
+import uuid
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
@@ -260,8 +261,18 @@ class CheckpointStore:
             for value in row:
                 text = str(value).replace('"', '""')
                 csv_row.append(f'"{text}"')
-            text_buffer.append(",".join(csv_row))
+                text_buffer.append(",".join(csv_row))
         return ("\n".join(text_buffer) + "\n").encode("utf-8")
+
+    def _write_bytes_atomic(self, path: Path, content: bytes) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+        try:
+            temp_path.write_bytes(content)
+            temp_path.replace(path)
+        finally:
+            if temp_path.exists():
+                temp_path.unlink()
 
     def materialize_output(
         self,
@@ -274,11 +285,10 @@ class CheckpointStore:
         payload = self._load_payload(upload_id)
         if not payload:
             raise FileNotFoundError(upload_id)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
         source_type = payload.get("source_type", "")
         if source_type == "xlsx":
             content = self.build_enriched_xlsx(upload_id=upload_id, results=results)
-            output_path.write_bytes(content)
+            self._write_bytes_atomic(output_path, content)
             return output_path
-        output_path.write_bytes(self.build_summary_csv(results=results))
+        self._write_bytes_atomic(output_path, self.build_summary_csv(results=results))
         return output_path

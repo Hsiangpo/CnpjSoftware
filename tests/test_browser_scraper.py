@@ -81,6 +81,48 @@ def test_browser_client_fetches_company_html_through_playwright_proxy(monkeypatc
     assert company.source_provider == "cnpjbiz.browser"
     assert company.source_proxy_port == 15121
     assert launch_calls[0]["proxy"]["server"] == "http://blurpath.net:15121"
+    assert "executable_path" not in launch_calls[0]
+
+
+def test_browser_client_uses_custom_executable_path_when_provided(monkeypatch):
+    import cnpj_tool.browser_scraper as browser_module
+
+    launch_calls = []
+
+    class FakeBrowser:
+        def new_context(self, **kwargs):
+            raise RuntimeError("stop after launch")
+
+        def close(self):
+            return None
+
+    class FakeChromium:
+        def launch(self, **kwargs):
+            launch_calls.append(kwargs)
+            return FakeBrowser()
+
+    class FakePlaywright:
+        chromium = FakeChromium()
+
+        def stop(self):
+            return None
+
+    class FakeSyncPlaywright:
+        def start(self):
+            return FakePlaywright()
+
+    monkeypatch.setattr(browser_module, "sync_playwright", lambda: FakeSyncPlaywright())
+
+    client = browser_module.CnpjBizBrowserClient(executable_path="C:/Browser/chrome.exe", max_retries=1)
+
+    try:
+        client.fetch_html("03.541.629/0001-37")
+    except browser_module.CnpjBizError:
+        pass
+    else:
+        raise AssertionError("expected CnpjBizError")
+
+    assert launch_calls[0]["executable_path"] == "C:/Browser/chrome.exe"
 
 
 def test_browser_client_rotates_to_next_proxy_after_timeout(monkeypatch):
