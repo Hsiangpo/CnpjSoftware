@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, TimeoutError, as_completed
 
 from .cnpj import dedupe_preserve_order, format_cnpj, normalize_cnpj
 from .models import BatchResult, Candidate, CompanyData, ResponsibleResult
@@ -146,7 +146,9 @@ class CompanyAnalyzer:
                     time.sleep(self.request_delay_seconds)
             return [cache[cnpj] for cnpj in normalized_inputs if cnpj in cache]
 
-        with ThreadPoolExecutor(max_workers=self.max_concurrency) as executor:
+        executor = ThreadPoolExecutor(max_workers=self.max_concurrency)
+        stopped_early = False
+        try:
             next_index = 0
             futures = {}
 
@@ -164,10 +166,22 @@ class CompanyAnalyzer:
                 submit_next()
 
             while futures:
-                future = next(as_completed(tuple(futures)))
+                if should_stop and should_stop():
+                    stopped_early = True
+                    for future in futures:
+                        future.cancel()
+                    executor.shutdown(wait=False, cancel_futures=True)
+                    return [cache[cnpj] for cnpj in normalized_inputs if cnpj in cache]
+                try:
+                    future = next(as_completed(tuple(futures), timeout=0.1))
+                except TimeoutError:
+                    continue
                 cnpj = futures.pop(future)
                 cache[cnpj] = future.result()
                 if on_result:
                     on_result(cache[cnpj])
                 submit_next()
+        finally:
+            if not stopped_early:
+                executor.shutdown(wait=True, cancel_futures=False)
         return [cache[cnpj] for cnpj in normalized_inputs if cnpj in cache]

@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>CNPJ Batch Analyzer Console</title>
     <link rel="icon" href="data:," />
-    <link rel="stylesheet" href="/static/styles.css?v=20260513f" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260514a" />
     <script src="/static/lucide.min.js?v=1.14.0"></script>
   </head>
   <body>
@@ -38,6 +38,36 @@
           <div class="form-group">
             <label for="modelInput">模型</label>
             <input id="modelInput" type="text" class="input-dark" />
+          </div>
+          <div class="form-group-row">
+            <div class="form-group">
+              <label for="proxyHostInput">代理主机</label>
+              <input id="proxyHostInput" type="text" class="input-dark" />
+            </div>
+            <div class="form-group">
+              <label for="proxyRegionInput">区域</label>
+              <input id="proxyRegionInput" type="text" class="input-dark" />
+            </div>
+          </div>
+          <div class="form-group-row">
+            <div class="form-group">
+              <label for="proxyUsernameInput">代理账号</label>
+              <input id="proxyUsernameInput" type="text" class="input-dark" />
+            </div>
+            <div class="form-group">
+              <label for="proxyPasswordInput">代理密码</label>
+              <input id="proxyPasswordInput" type="password" autocomplete="off" class="input-dark" />
+            </div>
+          </div>
+          <div class="form-group-row">
+            <div class="form-group">
+              <label for="proxyProtocolInput">代理协议</label>
+              <input id="proxyProtocolInput" type="text" class="input-dark" />
+            </div>
+            <div class="form-group">
+              <label for="proxySessionInput">会话分钟</label>
+              <input id="proxySessionInput" type="number" min="1" max="120" step="1" class="input-dark" />
+            </div>
           </div>
           <div class="form-group-row">
             <div class="form-group">
@@ -85,9 +115,9 @@
 
       <!-- Main Content -->
       <main class="main-content">
-        <!-- Top Board: Input, Queue, Guard -->
-        <div class="top-board">
-          <div class="panel queue-panel">
+        <div class="workspace-grid">
+          <section class="workspace-side">
+            <div class="panel queue-panel">
             <div class="panel-header">
               <h2>任务选择与队列</h2>
               <div class="hint-text" id="sourceDirHint">读取中...</div>
@@ -138,141 +168,140 @@
                 <div class="empty-state">当前队列为空</div>
               </div>
             </div>
-          </div>
+            </div>
 
-          <div class="panel guard-panel">
-            <div class="panel-header">
-              <h2>启动控制</h2>
+            <div class="panel guard-panel">
+              <div class="panel-header">
+                <h2>启动控制</h2>
+              </div>
+              <div class="guard-stats">
+                <div class="stat-item">
+                  <label>当前文件</label>
+                  <div class="stat-value" id="guardFile">-</div>
+                </div>
+                <div class="stat-item">
+                  <label>唯一数量</label>
+                  <div class="stat-value" id="guardUnique">0</div>
+                </div>
+                <div class="stat-item">
+                  <label>并发数</label>
+                  <div class="stat-value" id="guardConcurrency">-</div>
+                </div>
+                <div class="stat-item">
+                  <label>Provider顺序</label>
+                  <div class="stat-value" id="guardProviders">-</div>
+                </div>
+                <div class="stat-item">
+                  <label>代理端口</label>
+                  <div class="stat-value" id="guardPorts">-</div>
+                </div>
+              </div>
+              <div class="main-actions">
+                <button id="startButton" class="btn btn-primary btn-lg">
+                  <i data-lucide="play"></i> 开始分析
+                </button>
+                <button id="stopButton" class="btn btn-danger btn-lg" disabled>
+                  <i data-lucide="square"></i> 停止
+                </button>
+                <button id="clearButton" class="btn btn-secondary btn-lg" title="清空界面">
+                  <i data-lucide="refresh-cw"></i>
+                </button>
+              </div>
             </div>
-            <div class="guard-stats">
-              <div class="stat-item">
-                <label>当前文件</label>
-                <div class="stat-value" id="guardFile">-</div>
-              </div>
-              <div class="stat-item">
-                <label>唯一数量</label>
-                <div class="stat-value" id="guardUnique">0</div>
-              </div>
-              <div class="stat-item">
-                <label>并发数</label>
-                <div class="stat-value" id="guardConcurrency">-</div>
-              </div>
-              <div class="stat-item">
-                <label>Provider顺序</label>
-                <div class="stat-value" id="guardProviders">-</div>
-              </div>
-              <div class="stat-item">
-                <label>代理端口</label>
-                <div class="stat-value" id="guardPorts">-</div>
-              </div>
-            </div>
-            <div class="main-actions">
-              <button id="startButton" class="btn btn-primary btn-lg">
-                <i data-lucide="play"></i> 开始分析
-              </button>
-              <button id="stopButton" class="btn btn-danger btn-lg" disabled>
-                <i data-lucide="square"></i> 停止
-              </button>
-              <button id="clearButton" class="btn btn-secondary btn-lg" title="清空界面">
-                <i data-lucide="refresh-cw"></i>
-              </button>
-            </div>
-          </div>
-        </div>
+          </section>
 
-        <!-- Monitoring Board -->
-        <div class="monitor-board">
-          <div class="progress-section">
-            <div class="progress-header">
-              <div class="job-status-badge">
-                <span class="pulse-dot" id="jobPulseDot"></span>
-                <strong id="jobStatus">等待输入</strong>
+          <section class="workspace-main">
+            <div class="monitor-board">
+              <div class="progress-section">
+                <div class="progress-header">
+                  <div class="job-status-badge">
+                    <span class="pulse-dot" id="jobPulseDot"></span>
+                    <strong id="jobStatus">等待输入</strong>
+                  </div>
+                  <div class="runtime-stats">
+                    <span title="Provider"><i data-lucide="server"></i> <span id="runtimeProvider">-</span></span>
+                    <span title="Port"><i data-lucide="network"></i> <span id="runtimePort">-</span></span>
+                    <span title="Success Rate"><i data-lucide="check-circle"></i> <span id="runtimeSuccessRate">-</span></span>
+                    <span title="ETA"><i data-lucide="clock"></i> <span id="runtimeEta">-</span></span>
+                  </div>
+                </div>
+                <div class="progress-track">
+                  <div id="progressBar" class="progress-fill"></div>
+                </div>
               </div>
-              <div class="runtime-stats">
-                <span title="Provider"><i data-lucide="server"></i> <span id="runtimeProvider">-</span></span>
-                <span title="Port"><i data-lucide="network"></i> <span id="runtimePort">-</span></span>
-                <span title="Success Rate"><i data-lucide="check-circle"></i> <span id="runtimeSuccessRate">-</span></span>
-                <span title="ETA"><i data-lucide="clock"></i> <span id="runtimeEta">-</span></span>
-              </div>
-            </div>
-            <div class="progress-track">
-              <div id="progressBar" class="progress-fill"></div>
-            </div>
-          </div>
-          
-          <div class="metrics-row">
-            <div class="metric-box">
-              <div class="metric-label">待跑</div>
-              <div class="metric-value" id="inputCount">0</div>
-            </div>
-            <div class="metric-box">
-              <div class="metric-label">完成</div>
-              <div class="metric-value" id="doneCount">0</div>
-            </div>
-            <div class="metric-box success">
-              <div class="metric-label">正常</div>
-              <div class="metric-value" id="normalCount">0</div>
-            </div>
-            <div class="metric-box danger">
-              <div class="metric-label">异常</div>
-              <div class="metric-value" id="issueCount">0</div>
-            </div>
-          </div>
-        </div>
 
-        <!-- Results Table Panel -->
-        <div class="panel table-panel">
-          <div class="table-toolbar">
-            <div class="filter-group">
-              <button id="failureFilterAll" class="filter-btn active">全部</button>
-              <button id="failureFilterSuccess" class="filter-btn">成功</button>
-              <button id="failureFilterPartial" class="filter-btn">部分成功</button>
-              <button id="failureFilterIssues" class="filter-btn">失败</button>
+              <div class="metrics-row">
+                <div class="metric-box">
+                  <div class="metric-label">待跑</div>
+                  <div class="metric-value" id="inputCount">0</div>
+                </div>
+                <div class="metric-box">
+                  <div class="metric-label">完成</div>
+                  <div class="metric-value" id="doneCount">0</div>
+                </div>
+                <div class="metric-box success">
+                  <div class="metric-label">正常</div>
+                  <div class="metric-value" id="normalCount">0</div>
+                </div>
+                <div class="metric-box danger">
+                  <div class="metric-label">异常</div>
+                  <div class="metric-value" id="issueCount">0</div>
+                </div>
+              </div>
             </div>
-            <div class="action-group">
-              <button id="copyFailedButton" class="btn btn-secondary btn-sm" disabled>
-                <i data-lucide="copy"></i> 复制失败
-              </button>
-              <button id="runFailedButton" class="btn btn-secondary btn-sm" disabled>
-                <i data-lucide="rotate-ccw"></i> 重跑失败
-              </button>
+
+            <div class="panel table-panel">
+              <div class="table-toolbar">
+                <div class="filter-group">
+                  <button id="failureFilterAll" class="filter-btn active">全部</button>
+                  <button id="failureFilterSuccess" class="filter-btn">成功</button>
+                  <button id="failureFilterPartial" class="filter-btn">部分成功</button>
+                  <button id="failureFilterIssues" class="filter-btn">失败</button>
+                </div>
+                <div class="action-group">
+                  <button id="copyFailedButton" class="btn btn-secondary btn-sm" disabled>
+                    <i data-lucide="copy"></i> 复制失败
+                  </button>
+                  <button id="runFailedButton" class="btn btn-secondary btn-sm" disabled>
+                    <i data-lucide="rotate-ccw"></i> 重跑失败
+                  </button>
+                </div>
+              </div>
+              
+              <div class="table-container">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>CNPJ</th>
+                      <th>公司</th>
+                      <th>最高负责人</th>
+                      <th>角色</th>
+                      <th>状态</th>
+                    </tr>
+                  </thead>
+                  <tbody id="resultBody">
+                    <tr class="empty-row">
+                      <td colspan="5">暂无结果</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              
+              <div class="pagination">
+                <button id="prevPageButton" class="btn btn-secondary btn-sm" disabled>
+                  <i data-lucide="chevron-left"></i> 上一页
+                </button>
+                <span id="pageInfo" class="page-text">第 0 / 0 页</span>
+                <button id="nextPageButton" class="btn btn-secondary btn-sm" disabled>
+                  下一页 <i data-lucide="chevron-right"></i>
+                </button>
+              </div>
             </div>
-          </div>
-          
-          <div class="table-container">
-            <table>
-              <thead>
-                <tr>
-                  <th>CNPJ</th>
-                  <th>公司</th>
-                  <th>最高负责人</th>
-                  <th>角色</th>
-                  <th>置信度</th>
-                  <th>状态</th>
-                  <th>依据 / Trace</th>
-                </tr>
-              </thead>
-              <tbody id="resultBody">
-                <tr class="empty-row">
-                  <td colspan="7">暂无结果</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-          
-          <div class="pagination">
-            <button id="prevPageButton" class="btn btn-secondary btn-sm" disabled>
-              <i data-lucide="chevron-left"></i> 上一页
-            </button>
-            <span id="pageInfo" class="page-text">第 0 / 0 页</span>
-            <button id="nextPageButton" class="btn btn-secondary btn-sm" disabled>
-              下一页 <i data-lucide="chevron-right"></i>
-            </button>
-          </div>
+          </section>
         </div>
       </main>
     </div>
-    <script src="/static/app.js?v=20260513z"></script>
+    <script src="/static/app.js?v=20260514a"></script>
     <script>
       if (window.lucide) {
         lucide.createIcons();

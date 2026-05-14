@@ -31,11 +31,21 @@ class JobRequest(BaseModel):
     source_name: str = ""
 
 
+class RetryOneRequest(BaseModel):
+    cnpj: str
+
+
 class SettingsUpdateRequest(BaseModel):
     llm_api_key: str | None = None
     llm_model: str | None = None
     system_concurrency: int | None = None
     blurpath_proxy_ports: list[int] | None = None
+    blurpath_proxy_host: str | None = None
+    blurpath_proxy_protocol: str | None = None
+    blurpath_proxy_username: str | None = None
+    blurpath_proxy_password: str | None = None
+    blurpath_proxy_region: str | None = None
+    blurpath_proxy_session_time_minutes: int | None = None
 
 
 def resource_root() -> Path:
@@ -112,6 +122,12 @@ def _settings_payload() -> dict[str, Any]:
         "input_dir": public["input_dir"],
         "output_dir": public["output_dir"],
         "blurpath_available_proxy_ports": available_ports,
+        "blurpath_proxy_host": public["blurpath_proxy_host"],
+        "blurpath_proxy_protocol": public["blurpath_proxy_protocol"],
+        "blurpath_proxy_username": public["blurpath_proxy_username"],
+        "blurpath_proxy_password": public["blurpath_proxy_password"],
+        "blurpath_proxy_region": public["blurpath_proxy_region"],
+        "blurpath_proxy_session_time_minutes": public["blurpath_proxy_session_time_minutes"],
         "blurpath_proxy_ports": public["blurpath_proxy_ports"],
     }
 
@@ -166,17 +182,75 @@ def _output_path_for(settings: Any, filename: str, source_type: str) -> Path:
     return settings.output_dir / output_filename_for(filename, source_type)
 
 
-def _open_directory(path: Path) -> list[str]:
+def _clean_open_error_output(text: str) -> str:
+    lines = [
+        line.strip()
+        for line in str(text or "").splitlines()
+        if line.strip()
+        and "dbind-WARNING" not in line
+        and "AT-SPI:" not in line
+    ]
+    return " | ".join(lines)
+
+
+def _spreadsheet_launcher_hint(path: Path, error_text: str) -> str:
+    association = ""
+    if shutil.which("xdg-mime"):
+        mime_type = {
+            ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ".xls": "application/vnd.ms-excel",
+            ".csv": "text/csv",
+        }.get(path.suffix.lower(), "")
+        if mime_type:
+            result = subprocess.run(["xdg-mime", "query", "default", mime_type], capture_output=True, text=True)
+            association = (result.stdout or "").strip()
+    message = "No spreadsheet application is installed or associated with this file type"
+    if association:
+        message += f" (desktop entry: {association})"
+    if error_text:
+        message += f". Launcher output: {error_text}"
+    return message
+
+
+def _open_path(path: Path) -> list[str]:
     system = platform.system()
     if system == "Windows":
-        return ["explorer", str(path)]
+        command = ["explorer", str(path)]
+        subprocess.Popen(command)
+        return command
     if system == "Darwin":
-        return ["open", str(path)]
-    if shutil.which("xdg-open"):
-        return ["xdg-open", str(path)]
-    if shutil.which("gio"):
-        return ["gio", "open", str(path)]
-    raise RuntimeError("No directory opener is available")
+        command = ["open", str(path)]
+        result = subprocess.run(command, capture_output=True, text=True)
+        if result.returncode == 0:
+            return command
+        raise RuntimeError(_clean_open_error_output(result.stderr or result.stdout or "open failed"))
+
+    attempted: list[str] = []
+    for command in (
+        ["xdg-open", str(path)] if shutil.which("xdg-open") else None,
+        ["gio", "open", str(path)] if shutil.which("gio") else None,
+    ):
+        if command is None:
+            continue
+        result = subprocess.run(command, capture_output=True, text=True)
+        if result.returncode == 0:
+            return command
+        attempted.append(_clean_open_error_output(result.stderr or result.stdout or f"{command[0]} failed"))
+
+    office_command = None
+    if path.suffix.lower() in {".xlsx", ".xls", ".csv"}:
+        if shutil.which("libreoffice"):
+            office_command = ["libreoffice", "--view", str(path)]
+        elif shutil.which("soffice"):
+            office_command = ["soffice", "--view", str(path)]
+    if office_command is not None:
+        subprocess.Popen(office_command)
+        return office_command
+
+    error_text = " | ".join(item for item in attempted if item) or "No file opener is available"
+    if path.suffix.lower() in {".xlsx", ".xls", ".csv"}:
+        raise RuntimeError(_spreadsheet_launcher_hint(path, error_text))
+    raise RuntimeError(error_text)
 
 
 def _safe_output_file_path(root: Path, filename: str) -> Path:
@@ -187,6 +261,26 @@ def _safe_output_file_path(root: Path, filename: str) -> Path:
     if not candidate.exists() or not candidate.is_file():
         raise FileNotFoundError(filename)
     return candidate
+
+
+def _retry_job_kwargs(original: Any, settings: Any, cnpjs: list[str]) -> dict[str, Any]:
+    if original.upload_id and original.source_name:
+        output_path = original.output_path
+        if not output_path and original.filename:
+            source_type = Path(original.filename).suffix.lower().lstrip(".")
+            output_path = str(_output_path_for(settings, original.filename, source_type))
+        return {
+            "upload_id": original.upload_id,
+            "source_name": original.source_name,
+            "filename": original.filename or original.source_name,
+            "output_path": output_path,
+        }
+    stem = Path(original.filename or original.source_name or original.job_id).stem
+    return {
+        "source_name": original.source_name,
+        "filename": f"{stem}-failed-retry.csv",
+        "output_path": str(settings.output_dir / f"{stem}-failed-retry.csv"),
+    }
 
 
 def _redact_proxy_error(error: str, settings: Any) -> str:
@@ -279,6 +373,12 @@ def create_app(auto_run_jobs: bool = True) -> FastAPI:
                 llm_model=request.llm_model,
                 system_concurrency=request.system_concurrency,
                 blurpath_proxy_ports=request.blurpath_proxy_ports,
+                blurpath_proxy_host=request.blurpath_proxy_host,
+                blurpath_proxy_protocol=request.blurpath_proxy_protocol,
+                blurpath_proxy_username=request.blurpath_proxy_username,
+                blurpath_proxy_password=request.blurpath_proxy_password,
+                blurpath_proxy_region=request.blurpath_proxy_region,
+                blurpath_proxy_session_time_minutes=request.blurpath_proxy_session_time_minutes,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -308,8 +408,7 @@ def create_app(auto_run_jobs: bool = True) -> FastAPI:
         settings = load_settings()
         try:
             path = _safe_output_file_path(settings.output_dir, filename)
-            command = _open_directory(path)
-            subprocess.Popen(command)
+            command = _open_path(path)
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail="Output file not found") from exc
         except Exception as exc:
@@ -321,8 +420,7 @@ def create_app(auto_run_jobs: bool = True) -> FastAPI:
         settings = load_settings()
         settings.output_dir.mkdir(parents=True, exist_ok=True)
         try:
-            command = _open_directory(settings.output_dir)
-            subprocess.Popen(command)
+            command = _open_path(settings.output_dir)
         except Exception as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         return {"opened": True, "output_dir": str(settings.output_dir)}
@@ -345,11 +443,12 @@ def create_app(auto_run_jobs: bool = True) -> FastAPI:
         completed_job = app.state.jobs.get(job_id)
         if completed_job.upload_id and completed_job.output_path:
             settings = load_settings()
+            full_results = get_checkpoint_store(app).load_results(completed_job.upload_id)
             output_path = get_checkpoint_store(app).materialize_output(
                 upload_id=completed_job.upload_id,
                 filename=completed_job.filename or completed_job.source_name or completed_job.job_id,
                 output_path=Path(completed_job.output_path),
-                results=completed_job.results,
+                results=full_results,
             )
             app.state.jobs.set_output_path(job_id, str(output_path))
 
@@ -422,21 +521,48 @@ def create_app(auto_run_jobs: bool = True) -> FastAPI:
             original = app.state.jobs.get(job_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="Job not found") from exc
+        source_results = (
+            get_checkpoint_store(app).load_results(original.upload_id)
+            if original.upload_id
+            else original.results
+        )
         failed_cnpjs = [
             item.normalized_cnpj
-            for item in original.results
+            for item in source_results
             if item.status != "success"
         ]
         failed_cnpjs = dedupe_preserve_order(failed_cnpjs)
         if not failed_cnpjs:
             raise HTTPException(status_code=400, detail="This job has no failed CNPJ values")
-        stem = Path(original.filename or original.source_name or original.job_id).stem
-        retry_output = settings.output_dir / f"{stem}-failed-retry.csv"
         retry_job = app.state.jobs.create(
             failed_cnpjs,
-            source_name=original.source_name,
-            filename=f"{stem}-failed-retry.csv",
-            output_path=str(retry_output),
+            **_retry_job_kwargs(original, settings, failed_cnpjs),
+        )
+        if auto_run_jobs:
+            background_tasks.add_task(run_job, retry_job.job_id)
+        return retry_job.to_dict()
+
+    @app.post("/api/jobs/{job_id}/retry-one")
+    def retry_one_job(job_id: str, request: RetryOneRequest, background_tasks: BackgroundTasks) -> dict[str, Any]:
+        settings = load_settings()
+        try:
+            original = app.state.jobs.get(job_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Job not found") from exc
+        digits = normalize_cnpj(request.cnpj)
+        if not validate_cnpj(digits):
+            raise HTTPException(status_code=400, detail="Invalid CNPJ") from None
+        source_results = (
+            get_checkpoint_store(app).load_results(original.upload_id)
+            if original.upload_id
+            else original.results
+        )
+        available = {item.normalized_cnpj for item in source_results}
+        if digits not in available and digits not in {normalize_cnpj(item) for item in original.input_cnpjs}:
+            raise HTTPException(status_code=404, detail="CNPJ not found in this job")
+        retry_job = app.state.jobs.create(
+            [digits],
+            **_retry_job_kwargs(original, settings, [digits]),
         )
         if auto_run_jobs:
             background_tasks.add_task(run_job, retry_job.job_id)

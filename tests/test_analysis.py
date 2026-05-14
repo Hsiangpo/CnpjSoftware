@@ -143,6 +143,52 @@ def test_analyze_many_stops_without_starting_remaining_work():
     assert processed == ["03541629000137"]
 
 
+def test_analyze_many_concurrent_stop_returns_without_waiting_for_other_inflight_work():
+    started = []
+
+    def fetch_company(cnpj: str) -> CompanyData:
+        started.append(cnpj)
+        if cnpj == "21746991000126":
+            time.sleep(1.0)
+        else:
+            time.sleep(0.05)
+        return CompanyData(
+            cnpj=cnpj,
+            formatted_cnpj=cnpj,
+            url=f"https://cnpj.biz/{cnpj}",
+            legal_name=f"Company {cnpj}",
+            candidates=[Candidate(name=f"Pessoa {cnpj}", role="Sócio-Administrador")],
+        )
+
+    analyzer = CompanyAnalyzer(
+        fetch_company=fetch_company,
+        analyze_with_llm=None,
+        request_delay_seconds=0,
+        max_concurrency=2,
+    )
+
+    stop_after_first = {"value": False}
+
+    def on_result(_result):
+        stop_after_first["value"] = True
+
+    started_at = time.perf_counter()
+    results = analyzer.analyze_many(
+        [
+            "03.541.629/0001-37",
+            "21.746.991/0001-26",
+            "02.759.853/0001-37",
+        ],
+        on_result=on_result,
+        should_stop=lambda: stop_after_first["value"],
+    )
+    elapsed = time.perf_counter() - started_at
+
+    assert elapsed < 0.6
+    assert len(results) == 1
+    assert started[:2] == ["03541629000137", "21746991000126"]
+
+
 def test_analyze_one_persists_provider_trace_on_fetch_failure():
     def fetch_company(_cnpj: str) -> CompanyData:
         exc = ProviderError("cnpj.biz returned HTTP 403")

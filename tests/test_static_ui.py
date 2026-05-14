@@ -24,6 +24,20 @@ def test_app_references_existing_dom_ids():
     assert sorted(referenced_ids - ids) == []
 
 
+def test_layout_and_proxy_fields_exist_in_index():
+    html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
+
+    assert 'class="workspace-grid"' in html
+    assert 'class="workspace-side"' in html
+    assert 'class="workspace-main"' in html
+    assert 'id="proxyHostInput"' in html
+    assert 'id="proxyRegionInput"' in html
+    assert 'id="proxyUsernameInput"' in html
+    assert 'id="proxyPasswordInput"' in html
+    assert 'id="proxyProtocolInput"' in html
+    assert 'id="proxySessionInput"' in html
+
+
 def test_index_uses_local_icon_asset():
     html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
 
@@ -117,7 +131,7 @@ console.log(JSON.stringify({{ startDisabled: elements.startButton.disabled, retr
     assert payload == {"startDisabled": True, "retryDisabled": True}
 
 
-def test_render_results_updates_metrics_and_analysis_meta():
+def test_render_results_updates_metrics_and_analysis_meta_without_reasoning_text():
     script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
     ids = sorted(set(re.findall(r'getElementById\("([^"]+)"\)', script)) | {"jobPulseDot", "apiBadgeDot"})
     harness = f"""
@@ -219,6 +233,8 @@ console.log(JSON.stringify({{
     assert payload["abnormal"] == "2"
     assert "gpt-5.4-mini" in payload["html"]
     assert "rule_fallback" in payload["html"]
+    assert 'class="reason-text">fallback<' not in payload["html"]
+    assert 'class="reason-text">ok<' not in payload["html"]
 
 
 def test_render_results_uses_unique_abnormal_counts_and_enables_retry_for_partial():
@@ -482,3 +498,300 @@ console.log(JSON.stringify({{
     payload = json.loads(result.stdout.strip().splitlines()[-1])
 
     assert payload == {"pending": "0", "completed": "3790", "normal": "3570", "abnormal": "220"}
+
+
+def test_start_adhoc_retry_job_posts_single_cnpj_job():
+    script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    ids = sorted(set(re.findall(r'getElementById\("([^"]+)"\)', script)) | {"jobPulseDot", "apiBadgeDot"})
+    harness = f"""
+const fs = require("fs");
+const vm = require("vm");
+const script = fs.readFileSync({json.dumps(str(ROOT / "static" / "app.js"))}, "utf8");
+function makeClassList() {{
+  const values = new Set();
+  return {{
+    add: (...items) => items.forEach((item) => values.add(item)),
+    remove: (...items) => items.forEach((item) => values.delete(item)),
+    toggle: (item, force) => {{
+      const enabled = force === undefined ? !values.has(item) : Boolean(force);
+      if (enabled) values.add(item); else values.delete(item);
+      return enabled;
+    }},
+    contains: (item) => values.has(item),
+  }};
+}}
+function makeElement(id) {{
+  return {{
+    id,
+    value: "",
+    textContent: "",
+    innerHTML: "",
+    disabled: false,
+    placeholder: "",
+    options: [],
+    style: {{}},
+    classList: makeClassList(),
+    addEventListener: () => undefined,
+    querySelectorAll: () => [],
+  }};
+}}
+const elements = Object.fromEntries({json.dumps(ids)}.map((id) => [id, makeElement(id)]));
+const requests = [];
+const context = {{
+  console,
+  alert: () => undefined,
+  navigator: {{ clipboard: {{ writeText: async () => undefined }} }},
+  document: {{ getElementById: (id) => elements[id] || makeElement(id) }},
+  window: {{ clearInterval: () => undefined, setInterval: () => 1 }},
+  fetch: async (url, options = undefined) => {{
+    requests.push({{ url, options }});
+    if (url === "/api/jobs") {{
+      return {{ ok: true, json: async () => ({{ job_id: "job-1", status: "queued", input_cnpjs: ["03541629000137"], results: [] }}) }};
+    }}
+    return {{ ok: true, json: async () => ({{}}) }};
+  }},
+}};
+context.window.document = context.document;
+context.globalThis = context;
+vm.createContext(context);
+vm.runInContext(script + "\\nglobalThis.__uiTest = {{ startAdhocRetryJob }};", context);
+(async () => {{
+  await context.__uiTest.startAdhocRetryJob("03541629000137");
+  console.log(JSON.stringify(requests));
+}})();
+"""
+
+    result = subprocess.run(
+        ["node", "-e", harness],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    requests = json.loads(result.stdout.strip().splitlines()[-1])
+
+    job_requests = [item for item in requests if item["url"] == "/api/jobs"]
+    assert len(job_requests) == 1
+    assert json.loads(job_requests[0]["options"]["body"]) == {"cnpjs": ["03541629000137"]}
+
+
+def test_start_adhoc_retry_job_uses_retry_one_endpoint_when_current_job_exists():
+    script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    ids = sorted(set(re.findall(r'getElementById\("([^"]+)"\)', script)) | {"jobPulseDot", "apiBadgeDot"})
+    harness = f"""
+const fs = require("fs");
+const vm = require("vm");
+const script = fs.readFileSync({json.dumps(str(ROOT / "static" / "app.js"))}, "utf8");
+function makeClassList() {{
+  const values = new Set();
+  return {{
+    add: (...items) => items.forEach((item) => values.add(item)),
+    remove: (...items) => items.forEach((item) => values.delete(item)),
+    toggle: (item, force) => {{
+      const enabled = force === undefined ? !values.has(item) : Boolean(force);
+      if (enabled) values.add(item); else values.delete(item);
+      return enabled;
+    }},
+    contains: (item) => values.has(item),
+  }};
+}}
+function makeElement(id) {{
+  return {{
+    id,
+    value: "",
+    textContent: "",
+    innerHTML: "",
+    disabled: false,
+    placeholder: "",
+    options: [],
+    style: {{}},
+    classList: makeClassList(),
+    addEventListener: () => undefined,
+    querySelectorAll: () => [],
+  }};
+}}
+const elements = Object.fromEntries({json.dumps(ids)}.map((id) => [id, makeElement(id)]));
+const requests = [];
+const context = {{
+  console,
+  alert: () => undefined,
+  navigator: {{ clipboard: {{ writeText: async () => undefined }} }},
+  document: {{ getElementById: (id) => elements[id] || makeElement(id) }},
+  window: {{ clearInterval: () => undefined, setInterval: () => 1 }},
+  fetch: async (url, options = undefined) => {{
+    requests.push({{ url, options }});
+    if (url.includes('/retry-one')) {{
+      return {{ ok: true, json: async () => ({{ job_id: "job-2", status: "queued", input_cnpjs: ["03541629000137"], results: [] }}) }};
+    }}
+    return {{ ok: true, json: async () => ({{}}) }};
+  }},
+}};
+context.window.document = context.document;
+context.globalThis = context;
+vm.createContext(context);
+vm.runInContext(script + "\\nglobalThis.__uiTest = {{ state, startAdhocRetryJob }};", context);
+context.__uiTest.state.jobId = "job-parent";
+(async () => {{
+  await context.__uiTest.startAdhocRetryJob("03541629000137");
+  console.log(JSON.stringify(requests));
+}})();
+"""
+
+    result = subprocess.run(
+        ["node", "-e", harness],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    requests = json.loads(result.stdout.strip().splitlines()[-1])
+
+    retry_requests = [item for item in requests if item["url"] == "/api/jobs/job-parent/retry-one"]
+    assert len(retry_requests) == 1
+    assert json.loads(retry_requests[0]["options"]["body"]) == {"cnpj": "03541629000137"}
+
+
+def test_queue_failed_retry_item_caps_at_three_rounds():
+    script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    ids = sorted(set(re.findall(r'getElementById\("([^"]+)"\)', script)) | {"jobPulseDot", "apiBadgeDot"})
+    harness = f"""
+const fs = require("fs");
+const vm = require("vm");
+const script = fs.readFileSync({json.dumps(str(ROOT / "static" / "app.js"))}, "utf8");
+function makeClassList() {{
+  const values = new Set();
+  return {{
+    add: (...items) => items.forEach((item) => values.add(item)),
+    remove: (...items) => items.forEach((item) => values.delete(item)),
+    toggle: (item, force) => {{
+      const enabled = force === undefined ? !values.has(item) : Boolean(force);
+      if (enabled) values.add(item); else values.delete(item);
+      return enabled;
+    }},
+    contains: (item) => values.has(item),
+  }};
+}}
+function makeElement(id) {{
+  return {{
+    id,
+    value: "",
+    textContent: "",
+    innerHTML: "",
+    disabled: false,
+    placeholder: "",
+    options: [],
+    style: {{}},
+    classList: makeClassList(),
+    addEventListener: () => undefined,
+    querySelectorAll: () => [],
+  }};
+}}
+const elements = Object.fromEntries({json.dumps(ids)}.map((id) => [id, makeElement(id)]));
+const context = {{
+  console,
+  alert: () => undefined,
+  navigator: {{ clipboard: {{ writeText: async () => undefined }} }},
+  document: {{ getElementById: (id) => elements[id] || makeElement(id) }},
+  window: {{ clearInterval: () => undefined, setInterval: () => 1 }},
+  fetch: async () => ({{ ok: true, json: async () => ({{}}) }}),
+}};
+context.window.document = context.document;
+context.globalThis = context;
+vm.createContext(context);
+vm.runInContext(script + "\\nglobalThis.__uiTest = {{ buildFailedRetryQueueItem }};", context);
+const job = {{
+  job_id: "job-1",
+  status: "completed",
+  source_name: "sample.xlsx",
+  filename: "sample.xlsx",
+  input_cnpjs: ["1", "2"],
+  results: [
+    {{ input_cnpj: "1", normalized_cnpj: "1", status: "success" }},
+    {{ input_cnpj: "2", normalized_cnpj: "2", status: "fetch_error" }}
+  ]
+}};
+const round1 = context.__uiTest.buildFailedRetryQueueItem(job, 1);
+const round3 = context.__uiTest.buildFailedRetryQueueItem(job, 3);
+const round4 = context.__uiTest.buildFailedRetryQueueItem(job, 4);
+console.log(JSON.stringify({{ round1, round3, round4 }}));
+"""
+
+    result = subprocess.run(
+        ["node", "-e", harness],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    payload = json.loads(result.stdout.strip().splitlines()[-1])
+
+    assert payload["round1"]["retryAttempt"] == 1
+    assert payload["round3"]["retryAttempt"] == 3
+    assert payload["round4"] is None
+
+
+def test_append_queue_item_dedupes_same_retry_round():
+    script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    ids = sorted(set(re.findall(r'getElementById\("([^"]+)"\)', script)) | {"jobPulseDot", "apiBadgeDot"})
+    harness = f"""
+const fs = require("fs");
+const vm = require("vm");
+const script = fs.readFileSync({json.dumps(str(ROOT / "static" / "app.js"))}, "utf8");
+function makeClassList() {{
+  const values = new Set();
+  return {{
+    add: (...items) => items.forEach((item) => values.add(item)),
+    remove: (...items) => items.forEach((item) => values.delete(item)),
+    toggle: (item, force) => {{
+      const enabled = force === undefined ? !values.has(item) : Boolean(force);
+      if (enabled) values.add(item); else values.delete(item);
+      return enabled;
+    }},
+    contains: (item) => values.has(item),
+  }};
+}}
+function makeElement(id) {{
+  return {{
+    id,
+    value: "",
+    textContent: "",
+    innerHTML: "",
+    disabled: false,
+    placeholder: "",
+    options: [],
+    style: {{}},
+    classList: makeClassList(),
+    addEventListener: () => undefined,
+    querySelectorAll: () => [],
+  }};
+}}
+const elements = Object.fromEntries({json.dumps(ids)}.map((id) => [id, makeElement(id)]));
+const context = {{
+  console,
+  alert: () => undefined,
+  navigator: {{ clipboard: {{ writeText: async () => undefined }} }},
+  document: {{ getElementById: (id) => elements[id] || makeElement(id) }},
+  window: {{ clearInterval: () => undefined, setInterval: () => 1 }},
+  fetch: async () => ({{ ok: true, json: async () => ({{}}) }}),
+}};
+context.window.document = context.document;
+context.globalThis = context;
+vm.createContext(context);
+vm.runInContext(script + "\\nglobalThis.__uiTest = {{ state, appendQueueItem, buildFailedRetryQueueItem }};", context);
+const job = {{ job_id: "job-1", status: "completed", source_name: "sample.xlsx", filename: "sample.xlsx", input_cnpjs: ["1"], results: [{{ input_cnpj: "1", normalized_cnpj: "1", status: "fetch_error" }}] }};
+const item = context.__uiTest.buildFailedRetryQueueItem(job, 1);
+context.__uiTest.appendQueueItem(item);
+context.__uiTest.appendQueueItem(item);
+console.log(JSON.stringify(context.__uiTest.state.sourceQueue));
+"""
+
+    result = subprocess.run(
+        ["node", "-e", harness],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    payload = json.loads(result.stdout.strip().splitlines()[-1])
+
+    assert len(payload) == 1

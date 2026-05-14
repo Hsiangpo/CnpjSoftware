@@ -187,12 +187,9 @@ class CheckpointStore:
         headers = [
             "负责人姓名",
             "负责人角色",
-            "置信度",
             "状态",
             "分析来源",
             "模型",
-            "依据",
-            "Provider Trace",
         ]
         row_ref_map = {}
         for item in payload.get("row_refs", []):
@@ -212,9 +209,6 @@ class CheckpointStore:
                 role = "; ".join(
                     result.responsible.role for result in matched_results if result.responsible and result.responsible.role
                 )
-                confidence = "; ".join(
-                    str(result.responsible.confidence) for result in matched_results if result.responsible
-                )
                 status = "; ".join(result.status for result in matched_results)
                 source = "; ".join(
                     result.responsible.analysis_source for result in matched_results if result.responsible
@@ -222,18 +216,7 @@ class CheckpointStore:
                 model = "; ".join(
                     result.responsible.model_used for result in matched_results if result.responsible and result.responsible.model_used
                 )
-                reasoning = " | ".join(
-                    result.responsible.reasoning for result in matched_results if result.responsible and result.responsible.reasoning
-                )
-                provider_trace = " | ".join(
-                    "; ".join(
-                        f"{trace.provider}:{trace.status}:{trace.error}"
-                        for trace in result.provider_trace
-                    )
-                    for result in matched_results
-                    if result.provider_trace
-                )
-                values = [names, role, confidence, status, source, model, reasoning, provider_trace]
+                values = [names, role, status, source, model]
                 for offset, value in enumerate(values, start=1):
                     sheet.cell(row=row_number, column=max_col + offset, value=value)
 
@@ -250,34 +233,24 @@ class CheckpointStore:
                 "Company",
                 "Responsible",
                 "Role",
-                "Confidence",
                 "Status",
                 "AnalysisSource",
                 "ModelUsed",
-                "Evidence",
-                "ProviderTrace",
                 "URL",
             ]
         ]
         for item in results:
             company = item.company or None
             responsible = item.responsible or None
-            provider_trace = " | ".join(
-                f"{trace.provider}:{trace.status}:{trace.error}"
-                for trace in item.provider_trace
-            )
             rows.append(
                 [
                     item.input_cnpj or item.normalized_cnpj or "",
                     (company.trade_name or company.legal_name) if company else "",
                     "; ".join(responsible.names) if responsible else "",
                     responsible.role if responsible else "",
-                    responsible.confidence if responsible else "",
                     item.status,
                     responsible.analysis_source if responsible else "",
                     responsible.model_used if responsible else "",
-                    (responsible.reasoning if responsible else "") or item.error or "",
-                    provider_trace,
                     (company.url if company else "") or f"https://cnpj.biz/{item.normalized_cnpj}",
                 ]
             )

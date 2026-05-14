@@ -140,33 +140,29 @@ class LLMClient:
         return (
             "Analyze Brazilian CNPJ company registry data. "
             "Return exactly one JSON object with keys: "
-            "names (array of strings), role (string), confidence (number from 0 to 1), reasoning (string). "
+            "names (array of strings), role (string), confidence (number from 0 to 1). "
             "Do not return objects inside names. "
             "If several people share the highest role, return all names."
         )
 
-    def _parse_result(self, content: str) -> tuple[list[str], str, float, str]:
+    def _parse_result(self, content: str) -> tuple[list[str], str, float]:
         parsed = extract_json_object(content)
         names = parsed.get("names") or parsed.get("name") or []
         role = str(parsed.get("role", ""))
         confidence_value = parsed.get("confidence", 0.0)
-        reasoning = str(parsed.get("reasoning", ""))
 
         if isinstance(names, str):
             names = [names]
         elif isinstance(names, list) and names and isinstance(names[0], dict):
             role = role or str(names[0].get("role", ""))
             derived_names = [str(item.get("name", "")).strip() for item in names if str(item.get("name", "")).strip()]
-            if not reasoning:
-                reasons = [str(item.get("reasoning", "")).strip() for item in names if str(item.get("reasoning", "")).strip()]
-                reasoning = " ".join(reasons)
             if parsed.get("confidence") is None and names[0].get("confidence") is not None:
                 confidence_value = names[0].get("confidence", 0.0)
             names = derived_names
 
         confidence = float(confidence_value or 0.0)
         confidence = max(0.0, min(1.0, confidence))
-        return [str(name) for name in names], role, confidence, reasoning
+        return [str(name) for name in names], role, confidence
 
     def _analyze_with_retries(self, company: CompanyData) -> Any:
         last_error: Exception | None = None
@@ -219,15 +215,12 @@ class LLMClient:
             or payload.get("choices", [{}])[0].get("text")
             or ""
         )
-        names, role, confidence, reasoning = self._parse_result(content)
-        if self.selected_model and self.selected_model != self.model:
-            prefix = f"Primary model {self.model} unavailable; fallback model {self.selected_model} was used."
-            reasoning = f"{prefix} {reasoning}".strip()
+        names, role, confidence = self._parse_result(content)
         return ResponsibleResult(
             names=names,
             role=role,
             confidence=confidence,
-            reasoning=reasoning,
+            reasoning="",
             analysis_source=self.selected_analysis_source(),
             model_used=self.selected_model or self.model,
             candidates=company.candidates,

@@ -48,8 +48,7 @@ class FallbackSession:
                             "content": (
                                 '{"names":["Carlos","Poliana"],'
                                 '"role":"Sócio-Administrador",'
-                                '"confidence":0.97,'
-                                '"reasoning":"The QSA shows both people with the highest role."}'
+                                '"confidence":0.97}'
                             )
                         }
                     }
@@ -93,8 +92,7 @@ class RetryOnceSession:
                             "content": (
                                 '{"names":["Carlos"],'
                                 '"role":"Sócio-Administrador",'
-                                '"confidence":0.91,'
-                                '"reasoning":"Retry succeeded."}'
+                                '"confidence":0.91}'
                             )
                         }
                     }
@@ -171,7 +169,7 @@ def test_llm_client_uses_fallback_model_when_primary_fails():
     assert result.role == "Sócio-Administrador"
     assert result.analysis_source == "llm_fallback_model"
     assert result.model_used == "fallback-model"
-    assert "fallback model fallback-model was used" in result.reasoning
+    assert result.reasoning == ""
     assert client.session.post_calls == ["primary-model", "fallback-model", "fallback-model"]
 
 

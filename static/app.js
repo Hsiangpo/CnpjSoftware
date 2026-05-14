@@ -8,6 +8,8 @@ const state = {
   followLatestPage: true,
   apiKeyMasked: false,
   apiKeyDirty: false,
+  proxyPasswordMasked: false,
+  proxyPasswordDirty: false,
   sourceFiles: [],
   selectedSourceName: "",
   sourceQueue: [],
@@ -21,11 +23,18 @@ const state = {
 
 const ACTIVE_JOB_STATUSES = new Set(["queued", "running", "canceling"]);
 const TERMINAL_JOB_STATUSES = new Set(["completed", "failed", "canceled"]);
+const MAX_FAILED_RETRY_ROUNDS = 3;
 
 const els = {
   apiBadge: document.getElementById("apiBadge"),
   apiKeyInput: document.getElementById("apiKeyInput"),
   modelInput: document.getElementById("modelInput"),
+  proxyHostInput: document.getElementById("proxyHostInput"),
+  proxyRegionInput: document.getElementById("proxyRegionInput"),
+  proxyUsernameInput: document.getElementById("proxyUsernameInput"),
+  proxyPasswordInput: document.getElementById("proxyPasswordInput"),
+  proxyProtocolInput: document.getElementById("proxyProtocolInput"),
+  proxySessionInput: document.getElementById("proxySessionInput"),
   concurrencyInput: document.getElementById("concurrencyInput"),
   blurpathPortsInput: document.getElementById("blurpathPortsInput"),
   blurpathPortsHint: document.getElementById("blurpathPortsHint"),
@@ -123,6 +132,36 @@ function abnormalResults(results = state.lastResults) {
 
 function queuedSources() {
   return state.sourceQueue.filter((item) => item.status === "queued");
+}
+
+function queueItemLabel(item) {
+  return item?.displayName || item?.name || "-";
+}
+
+function queueItemKey(item) {
+  if (!item) return "";
+  if (item.kind === "retry_failed") {
+    return `${item.kind}:${item.parentJobId}:${item.retryAttempt}`;
+  }
+  return `${item.kind || "source"}:${item.name || ""}`;
+}
+
+function hasQueueItem(item) {
+  const key = queueItemKey(item);
+  return Boolean(key) && state.sourceQueue.some((existing) => {
+    if (existing.status === "completed" || existing.status === "canceled" || existing.status === "failed") {
+      return false;
+    }
+    return queueItemKey(existing) === key;
+  });
+}
+
+function appendQueueItem(item) {
+  if (!item || hasQueueItem(item)) {
+    return false;
+  }
+  state.sourceQueue.push(item);
+  return true;
 }
 
 function activeQueueItem() {
@@ -232,22 +271,6 @@ function formatEtaSeconds(seconds) {
   return `${minutes}m ${String(secs).padStart(2, "0")}s`;
 }
 
-function renderProviderTrace(providerTrace) {
-  const trace = Array.isArray(providerTrace) ? providerTrace : [];
-  if (!trace.length) return "";
-  return `
-    <div class="trace-stack">
-      ${trace.map((entry) => `
-        <div class="trace-item">
-          <span class="trace-provider">${escapeHtml(entry.provider || "-")}</span>
-          <span class="trace-status">${escapeHtml(statusLabel(entry.status))}</span>
-          <span class="trace-error" title="${escapeHtml(entry.error || "")}">${escapeHtml(entry.error || "")}</span>
-        </div>
-      `).join("")}
-    </div>
-  `;
-}
-
 function renderProxyProbeResults(results) {
   const rows = Array.isArray(results) ? results : [];
   if (!rows.length) {
@@ -273,6 +296,14 @@ function syncApiKeyField(value) {
   state.apiKeyDirty = false;
   els.apiKeyInput.value = "";
   els.apiKeyInput.placeholder = masked ? "已设置，留空保持不变" : "未设置";
+}
+
+function syncProxyPasswordField(value) {
+  const masked = value === "<set>";
+  state.proxyPasswordMasked = masked;
+  state.proxyPasswordDirty = false;
+  els.proxyPasswordInput.value = "";
+  els.proxyPasswordInput.placeholder = masked ? "已设置，留空保持不变" : "未设置";
 }
 
 function renderPagination(pageCount) {
@@ -314,6 +345,40 @@ function renderOutputFiles() {
   });
 }
 
+function buildFailedRetryQueueItem(job, retryAttempt) {
+  const attempt = Number(retryAttempt || 0);
+  if (!job || job.status !== "completed" || attempt < 1 || attempt > MAX_FAILED_RETRY_ROUNDS) {
+    return null;
+  }
+  const abnormal = abnormalResults(job.results || []);
+  if (!abnormal.length) {
+    return null;
+  }
+  const sourceName = job.source_name || job.filename || job.job_id || "任务";
+  const stem = sourceName.replace(/\.[^.]+$/, "") || sourceName;
+  return {
+    kind: "retry_failed",
+    name: sourceName,
+    displayName: `${stem} · 失败重跑 ${attempt}/${MAX_FAILED_RETRY_ROUNDS}`,
+    status: "queued",
+    jobId: "",
+    parentJobId: job.job_id,
+    retryAttempt: attempt,
+  };
+}
+
+function sourceQueueItem(name) {
+  return {
+    kind: "source",
+    name,
+    displayName: name,
+    status: "queued",
+    jobId: "",
+    parentJobId: "",
+    retryAttempt: 0,
+  };
+}
+
 function renderQueue() {
   if (!state.sourceQueue.length) {
     els.queueList.innerHTML = '<div class="empty-state">当前队列为空</div>';
@@ -330,7 +395,7 @@ function renderQueue() {
     return `
       <div class="queue-item">
         <div class="queue-info">
-          <div class="queue-name" title="${escapeHtml(item.name)}">${escapeHtml(item.name)}</div>
+          <div class="queue-name" title="${escapeHtml(queueItemLabel(item))}">${escapeHtml(queueItemLabel(item))}</div>
           <div class="status-badge ${statusClass}">${escapeHtml(statusLabel(item.status || "queued"))}</div>
         </div>
         <button class="btn btn-secondary btn-xs remove-queue-button" data-index="${index}" type="button" ${removeDisabled}>移除</button>
@@ -499,7 +564,7 @@ function renderResults(job) {
 
   const filteredResults = applyResultFilter(allResults);
   if (!filteredResults.length) {
-    els.resultBody.innerHTML = '<tr class="empty-row"><td colspan="7">当前筛选下暂无结果</td></tr>';
+    els.resultBody.innerHTML = '<tr class="empty-row"><td colspan="5">当前筛选下暂无结果</td></tr>';
     renderPagination(0);
     return;
   }
@@ -516,13 +581,11 @@ function renderResults(job) {
     const company = item.company || {};
     const responsible = item.responsible || {};
     const names = (responsible.names || []).join("; ");
-    const confidence = responsible.confidence != null ? `${Math.round(responsible.confidence * 100)}%` : "";
     const companyName = company.trade_name || company.legal_name || "";
     const url = company.url || `https://cnpj.biz/${item.normalized_cnpj}`;
-    const evidence = responsible.reasoning || item.error || "";
-    const providerTrace = renderProviderTrace(item.provider_trace);
+    const issueText = item.error || "";
     const analysisMeta = responsible.analysis_source
-      ? `<div class="reason-meta">${escapeHtml(responsible.analysis_source)}${responsible.model_used ? ` · ${escapeHtml(responsible.model_used)}` : ""}</div>`
+      ? `<div class="status-meta">${escapeHtml(responsible.analysis_source)}${responsible.model_used ? ` · ${escapeHtml(responsible.model_used)}` : ""}</div>`
       : "";
     const fetchMeta = company.source_provider
       ? `<div style="margin-top:4px;color:var(--text-muted);font-size:12px;">${escapeHtml(company.source_provider)}${company.source_proxy_port ? ` · port ${escapeHtml(company.source_proxy_port)}` : ""}</div>`
@@ -532,6 +595,9 @@ function renderResults(job) {
     if(item.status === "success") statusClass = "status-success";
     if(item.status === "partial_success" || item.status === "blocked_by_cloudflare") statusClass = "status-warning";
     if(item.status === "failed" || item.status === "fetch_error" || item.status === "not_found") statusClass = "status-danger";
+    const retryAction = item.status === "success"
+      ? ""
+      : `<div style="margin-top:8px;"><button class="btn btn-secondary btn-xs retry-single-button" data-cnpj="${escapeHtml(item.normalized_cnpj || item.input_cnpj || "")}" type="button">重跑本条</button></div>`;
 
     return `
       <tr>
@@ -543,16 +609,18 @@ function renderResults(job) {
         </td>
         <td>${escapeHtml(names || "-")}</td>
         <td>${escapeHtml(responsible.role || "-")}</td>
-        <td>${escapeHtml(confidence)}</td>
-        <td><span class="status-badge ${statusClass}">${escapeHtml(statusLabel(item.status))}</span></td>
-        <td class="reason-cell">
-          <div class="reason-text">${escapeHtml(evidence)}</div>
+        <td class="status-cell">
+          <span class="status-badge ${statusClass}">${escapeHtml(statusLabel(item.status))}</span>
+          ${issueText ? `<div class="status-detail">${escapeHtml(issueText)}</div>` : ""}
           ${analysisMeta}
-          ${providerTrace}
+          ${retryAction}
         </td>
       </tr>
     `;
   }).join("");
+  els.resultBody.querySelectorAll(".retry-single-button").forEach((button) => {
+    button.addEventListener("click", () => startAdhocRetryJob(button.dataset.cnpj || ""));
+  });
   renderPagination(pageCount);
 }
 
@@ -583,6 +651,12 @@ async function loadSettings() {
     if (!response.ok) throw new Error(data.detail || "设置读取失败");
     state.settings = data;
     syncApiKeyField(data.llm_api_key || "");
+    els.proxyHostInput.value = data.blurpath_proxy_host || "";
+    els.proxyRegionInput.value = data.blurpath_proxy_region || "";
+    els.proxyUsernameInput.value = data.blurpath_proxy_username || "";
+    syncProxyPasswordField(data.blurpath_proxy_password || "");
+    els.proxyProtocolInput.value = data.blurpath_proxy_protocol || "http";
+    els.proxySessionInput.value = data.blurpath_proxy_session_time_minutes || 10;
     els.modelInput.value = data.llm_model || "";
     els.concurrencyInput.value = data.system_concurrency || 1;
     const availablePorts = Array.isArray(data.blurpath_available_proxy_ports) ? data.blurpath_available_proxy_ports : [];
@@ -603,6 +677,11 @@ async function saveSettings() {
   try {
     const payload = {
       llm_model: els.modelInput.value.trim() || "gpt-5.4-mini",
+      blurpath_proxy_host: els.proxyHostInput.value.trim(),
+      blurpath_proxy_region: els.proxyRegionInput.value.trim(),
+      blurpath_proxy_username: els.proxyUsernameInput.value.trim(),
+      blurpath_proxy_protocol: els.proxyProtocolInput.value.trim() || "http",
+      blurpath_proxy_session_time_minutes: Number(els.proxySessionInput.value || "10"),
       system_concurrency: Number(els.concurrencyInput.value || "1"),
       blurpath_proxy_ports: (els.blurpathPortsInput.value || "")
         .split(",")
@@ -613,6 +692,10 @@ async function saveSettings() {
     if (!(state.apiKeyMasked && !state.apiKeyDirty && !apiKeyValue)) {
       payload.llm_api_key = apiKeyValue;
     }
+    const proxyPasswordValue = els.proxyPasswordInput.value.trim();
+    if (!(state.proxyPasswordMasked && !state.proxyPasswordDirty && !proxyPasswordValue)) {
+      payload.blurpath_proxy_password = proxyPasswordValue;
+    }
     const response = await fetch("/api/settings", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -622,6 +705,12 @@ async function saveSettings() {
     if (!response.ok) throw new Error(data.detail || "设置保存失败");
     state.settings = data;
     syncApiKeyField(data.llm_api_key || "");
+    els.proxyHostInput.value = data.blurpath_proxy_host || "";
+    els.proxyRegionInput.value = data.blurpath_proxy_region || "";
+    els.proxyUsernameInput.value = data.blurpath_proxy_username || "";
+    syncProxyPasswordField(data.blurpath_proxy_password || "");
+    els.proxyProtocolInput.value = data.blurpath_proxy_protocol || "http";
+    els.proxySessionInput.value = data.blurpath_proxy_session_time_minutes || 10;
     els.modelInput.value = data.llm_model || "";
     els.concurrencyInput.value = data.system_concurrency || 1;
     const availablePorts = Array.isArray(data.blurpath_available_proxy_ports) ? data.blurpath_available_proxy_ports : [];
@@ -727,10 +816,7 @@ async function openOutputFile(filename) {
 
 function enqueueSource(name) {
   if (!name) return;
-  if (state.sourceQueue.some((item) => item.name === name && item.status !== "completed")) {
-    return;
-  }
-  state.sourceQueue.push({ name, status: "queued", jobId: "" });
+  appendQueueItem(sourceQueueItem(name));
   renderQueue();
 }
 
@@ -763,6 +849,18 @@ function beginPolling(jobId) {
   }, 900);
 }
 
+async function handleCreatedJob(job) {
+  state.submitting = false;
+  state.jobId = job.job_id;
+  renderResults(job);
+  if (isJobTerminal(job)) {
+    await finishTerminalJob(job);
+  } else {
+    beginPolling(job.job_id);
+  }
+  return job;
+}
+
 function markActiveQueueItem(status, jobId = state.jobId) {
   const current = activeQueueItem();
   if (!current) return;
@@ -779,6 +877,10 @@ async function finishTerminalJob(job) {
     current.status = job.status === "completed" ? "completed" : job.status === "canceled" ? "canceled" : "failed";
     current.jobId = job.job_id;
     renderQueue();
+    const retryItem = buildFailedRetryQueueItem(job, Number(current.retryAttempt || 0) + 1);
+    if (retryItem && appendQueueItem(retryItem)) {
+      renderQueue();
+    }
   }
   const remaining = queuedSources().length > 0;
   if (state.queueRunning && remaining) {
@@ -798,15 +900,45 @@ async function startSourceJob(sourceName) {
     body: JSON.stringify({ source_name: sourceName }),
   });
   const job = await readJsonResponse(response, "任务创建失败");
-  state.submitting = false;
-  state.jobId = job.job_id;
-  renderResults(job);
-  if (isJobTerminal(job)) {
-    await finishTerminalJob(job);
-  } else {
-    beginPolling(job.job_id);
+  return handleCreatedJob(job);
+}
+
+async function startFailedRetryJob(parentJobId) {
+  const response = await fetch(`/api/jobs/${parentJobId}/retry-failed`, { method: "POST" });
+  const job = await readJsonResponse(response, "重跑失败任务创建失败");
+  return handleCreatedJob(job);
+}
+
+async function startAdhocRetryJob(cnpj) {
+  if (!cnpj || isRunActive()) return;
+  const currentJobId = state.jobId;
+  clearPollTimer();
+  els.jobStatus.textContent = "单条重跑提交中";
+  els.progressBar.style.width = "0%";
+  state.currentPage = 1;
+  state.followLatestPage = true;
+  state.submitting = true;
+  state.queueRunning = false;
+  syncRunButtons();
+  try {
+    const response = currentJobId
+      ? await fetch(`/api/jobs/${currentJobId}/retry-one`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cnpj }),
+      })
+      : await fetch("/api/jobs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cnpjs: [cnpj] }),
+      });
+    const job = await readJsonResponse(response, "单条重跑任务创建失败");
+    await handleCreatedJob(job);
+  } catch (error) {
+    state.submitting = false;
+    alert(error.message);
+    syncRunButtons();
   }
-  return job;
 }
 
 async function startQueueRun() {
@@ -821,7 +953,9 @@ async function startQueueRun() {
   next.status = "running";
   renderQueue();
   try {
-    const job = await startSourceJob(next.name);
+    const job = next.kind === "retry_failed"
+      ? await startFailedRetryJob(next.parentJobId)
+      : await startSourceJob(next.name);
     next.jobId = job.job_id;
     renderQueue();
   } catch (error) {
@@ -837,8 +971,7 @@ async function startJob() {
   if (isRunActive()) {
     return;
   }
-  const hasQueued = queuedSources().length > 0;
-  if (!state.selectedSourceName && !hasQueued) {
+  if (!state.selectedSourceName && !queuedSources().length) {
     els.jobStatus.textContent = "请先选择待爬文件";
     syncRunButtons();
     return;
@@ -851,13 +984,12 @@ async function startJob() {
   state.submitting = true;
   syncRunButtons();
   try {
-    if (hasQueued) {
-      state.queueRunning = true;
-      syncRunButtons();
-      await startQueueRun();
-    } else {
-      await startSourceJob(state.selectedSourceName);
+    if (!queuedSources().length && state.selectedSourceName) {
+      enqueueSource(state.selectedSourceName);
     }
+    state.queueRunning = true;
+    syncRunButtons();
+    await startQueueRun();
   } catch (error) {
     alert(error.message);
     state.submitting = false;
@@ -921,16 +1053,9 @@ async function runFailedJob() {
   try {
     const response = await fetch(`/api/jobs/${state.jobId}/retry-failed`, { method: "POST" });
     const job = await readJsonResponse(response, "重跑失败任务创建失败");
-    state.submitting = false;
     clearPollTimer();
-    state.jobId = job.job_id;
     state.queueRunning = false;
-    renderResults(job);
-    if (isJobTerminal(job)) {
-      await finishTerminalJob(job);
-    } else {
-      beginPolling(job.job_id);
-    }
+    await handleCreatedJob(job);
   } catch (error) {
     state.submitting = false;
     alert(error.message);
@@ -956,7 +1081,7 @@ function clearAll() {
   state.submitting = false;
   els.progressBar.style.width = "0%";
   els.jobStatus.textContent = "等待输入";
-  els.resultBody.innerHTML = '<tr class="empty-row"><td colspan="7">暂无结果</td></tr>';
+  els.resultBody.innerHTML = '<tr class="empty-row"><td colspan="5">暂无结果</td></tr>';
   const pulseDot = document.getElementById("jobPulseDot");
   if(pulseDot) pulseDot.classList.remove("running");
   renderPagination(0);
@@ -982,6 +1107,9 @@ els.clearButton.addEventListener("click", clearAll);
 els.saveSettingsButton.addEventListener("click", saveSettings);
 els.apiKeyInput.addEventListener("input", () => {
   state.apiKeyDirty = true;
+});
+els.proxyPasswordInput.addEventListener("input", () => {
+  state.proxyPasswordDirty = true;
 });
 els.proxyPreflightButton.addEventListener("click", runProxyPreflight);
 els.sourceFileSelect.addEventListener("change", () => {

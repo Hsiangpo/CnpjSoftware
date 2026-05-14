@@ -26,8 +26,10 @@ def test_health_endpoint_reports_ready(tmp_path, monkeypatch):
 def test_source_files_endpoint_lists_root_cnpj_directory(tmp_path, monkeypatch):
     input_dir = tmp_path / "cnpj"
     output_dir = tmp_path / "output"
+    checkpoint_dir = tmp_path / "checkpoints"
     input_dir.mkdir()
     output_dir.mkdir()
+    checkpoint_dir.mkdir()
     workbook = Workbook()
     sheet = workbook.active
     sheet.title = "batch1"
@@ -39,6 +41,7 @@ def test_source_files_endpoint_lists_root_cnpj_directory(tmp_path, monkeypatch):
     output_file.write_bytes(b"artifact")
     monkeypatch.setenv("CNPJ_TOOL_INPUT_DIR", str(input_dir))
     monkeypatch.setenv("CNPJ_TOOL_OUTPUT_DIR", str(output_dir))
+    monkeypatch.setenv("CNPJ_TOOL_CHECKPOINT_DIR", str(checkpoint_dir))
 
     client = TestClient(create_app(auto_run_jobs=False))
     response = client.get("/api/source-files")
@@ -91,15 +94,17 @@ def test_open_output_directory_endpoint_uses_platform_open_command(tmp_path, mon
     monkeypatch.setenv("CNPJ_TOOL_OUTPUT_DIR", str(output_dir))
     launches = []
 
-    def fake_popen(cmd, **kwargs):
+    def fake_run(cmd, **kwargs):
         launches.append(cmd)
 
-        class Dummy:
-            pass
+        class Result:
+            returncode = 0
+            stderr = ""
+            stdout = ""
 
-        return Dummy()
+        return Result()
 
-    monkeypatch.setattr(server_module.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(server_module.subprocess, "run", fake_run)
     monkeypatch.setattr(server_module.shutil, "which", lambda name: "/usr/bin/xdg-open" if name == "xdg-open" else None)
     monkeypatch.setattr(server_module.platform, "system", lambda: "Linux")
 
@@ -111,13 +116,11 @@ def test_open_output_directory_endpoint_uses_platform_open_command(tmp_path, mon
     assert launches == [["xdg-open", str(output_dir)]]
 
 
-def test_open_output_file_endpoint_uses_platform_open_command(tmp_path, monkeypatch):
+def test_open_output_directory_endpoint_uses_windows_explorer(tmp_path, monkeypatch):
     input_dir = tmp_path / "cnpj"
     output_dir = tmp_path / "output"
     input_dir.mkdir()
     output_dir.mkdir()
-    artifact = output_dir / "sample-responsaveis.xlsx"
-    artifact.write_text("artifact", encoding="utf-8")
     monkeypatch.setenv("CNPJ_TOOL_INPUT_DIR", str(input_dir))
     monkeypatch.setenv("CNPJ_TOOL_OUTPUT_DIR", str(output_dir))
     launches = []
@@ -131,6 +134,66 @@ def test_open_output_file_endpoint_uses_platform_open_command(tmp_path, monkeypa
         return Dummy()
 
     monkeypatch.setattr(server_module.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(server_module.platform, "system", lambda: "Windows")
+
+    client = TestClient(create_app(auto_run_jobs=False))
+    response = client.post("/api/output-directory/open")
+
+    assert response.status_code == 200
+    assert launches == [["explorer", str(output_dir)]]
+
+
+def test_open_output_directory_endpoint_uses_macos_open(tmp_path, monkeypatch):
+    input_dir = tmp_path / "cnpj"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    monkeypatch.setenv("CNPJ_TOOL_INPUT_DIR", str(input_dir))
+    monkeypatch.setenv("CNPJ_TOOL_OUTPUT_DIR", str(output_dir))
+    launches = []
+
+    def fake_run(cmd, **kwargs):
+        launches.append(cmd)
+
+        class Result:
+            returncode = 0
+            stderr = ""
+            stdout = ""
+
+        return Result()
+
+    monkeypatch.setattr(server_module.subprocess, "run", fake_run)
+    monkeypatch.setattr(server_module.platform, "system", lambda: "Darwin")
+
+    client = TestClient(create_app(auto_run_jobs=False))
+    response = client.post("/api/output-directory/open")
+
+    assert response.status_code == 200
+    assert launches == [["open", str(output_dir)]]
+
+
+def test_open_output_file_endpoint_uses_platform_open_command(tmp_path, monkeypatch):
+    input_dir = tmp_path / "cnpj"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    artifact = output_dir / "sample-responsaveis.xlsx"
+    artifact.write_text("artifact", encoding="utf-8")
+    monkeypatch.setenv("CNPJ_TOOL_INPUT_DIR", str(input_dir))
+    monkeypatch.setenv("CNPJ_TOOL_OUTPUT_DIR", str(output_dir))
+    launches = []
+
+    def fake_run(cmd, **kwargs):
+        launches.append(cmd)
+
+        class Result:
+            returncode = 0
+            stderr = ""
+            stdout = ""
+
+        return Result()
+
+    monkeypatch.setattr(server_module.subprocess, "run", fake_run)
     monkeypatch.setattr(server_module.shutil, "which", lambda name: "/usr/bin/xdg-open" if name == "xdg-open" else None)
     monkeypatch.setattr(server_module.platform, "system", lambda: "Linux")
 
@@ -140,6 +203,35 @@ def test_open_output_file_endpoint_uses_platform_open_command(tmp_path, monkeypa
     assert response.status_code == 200
     assert response.json()["opened"] is True
     assert launches == [["xdg-open", str(artifact)]]
+
+
+def test_open_output_file_endpoint_surfaces_launcher_failure(tmp_path, monkeypatch):
+    input_dir = tmp_path / "cnpj"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    artifact = output_dir / "sample-responsaveis.xlsx"
+    artifact.write_text("artifact", encoding="utf-8")
+    monkeypatch.setenv("CNPJ_TOOL_INPUT_DIR", str(input_dir))
+    monkeypatch.setenv("CNPJ_TOOL_OUTPUT_DIR", str(output_dir))
+
+    def fake_run(cmd, **kwargs):
+        class Result:
+            returncode = 4
+            stderr = "No application is registered as handling this file"
+            stdout = ""
+
+        return Result()
+
+    monkeypatch.setattr(server_module.subprocess, "run", fake_run)
+    monkeypatch.setattr(server_module.shutil, "which", lambda name: "/usr/bin/xdg-open" if name == "xdg-open" else None)
+    monkeypatch.setattr(server_module.platform, "system", lambda: "Linux")
+
+    client = TestClient(create_app(auto_run_jobs=False))
+    response = client.post("/api/output-files/sample-responsaveis.xlsx/open")
+
+    assert response.status_code == 500
+    assert "No application is registered" in response.json()["detail"]
 
 
 def test_directory_backed_job_writes_enriched_output_file(tmp_path, monkeypatch):
@@ -205,6 +297,9 @@ def test_directory_backed_job_writes_enriched_output_file(tmp_path, monkeypatch)
     output_workbook.close()
 
     assert "负责人姓名" in headers
+    assert "置信度" not in headers
+    assert "依据" not in headers
+    assert "Provider Trace" not in headers
     assert "Maria Teste" in row_values
 
 
@@ -304,6 +399,219 @@ def test_retry_failed_endpoint_includes_partial_success_and_dedupes(tmp_path, mo
     assert retry_job["input_cnpjs"] == ["03541629000137", "21746991000126"]
 
 
+def test_retry_failed_endpoint_reuses_original_source_output_for_directory_jobs(tmp_path, monkeypatch):
+    input_dir = tmp_path / "cnpj"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    monkeypatch.setenv("CNPJ_TOOL_INPUT_DIR", str(input_dir))
+    monkeypatch.setenv("CNPJ_TOOL_OUTPUT_DIR", str(output_dir))
+
+    app = create_app(auto_run_jobs=False)
+    original = app.state.jobs.create(
+        ["03541629000137", "21746991000126"],
+        upload_id="upload-1",
+        source_name="sample.xlsx",
+        filename="sample.xlsx",
+        output_path=str(output_dir / "sample-responsaveis.xlsx"),
+        existing_results=[
+            BatchResult(
+                input_cnpj="03.541.629/0001-37",
+                normalized_cnpj="03541629000137",
+                status="fetch_error",
+                error="timeout",
+            )
+            ],
+        )
+
+    class FakeStore:
+        def load_results(self, upload_id):
+            assert upload_id == "upload-1"
+            return [
+                BatchResult(
+                    input_cnpj="03.541.629/0001-37",
+                    normalized_cnpj="03541629000137",
+                    status="fetch_error",
+                    error="timeout",
+                )
+            ]
+
+    monkeypatch.setattr(server_module, "get_checkpoint_store", lambda _app: FakeStore())
+    client = TestClient(app)
+
+    response = client.post(f"/api/jobs/{original.job_id}/retry-failed")
+
+    assert response.status_code == 200
+    retry_job = response.json()
+    assert retry_job["upload_id"] == "upload-1"
+    assert retry_job["filename"] == "sample.xlsx"
+    assert retry_job["output_path"].endswith("sample-responsaveis.xlsx")
+
+
+def test_retry_one_endpoint_uses_original_source_context(tmp_path, monkeypatch):
+    input_dir = tmp_path / "cnpj"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    monkeypatch.setenv("CNPJ_TOOL_INPUT_DIR", str(input_dir))
+    monkeypatch.setenv("CNPJ_TOOL_OUTPUT_DIR", str(output_dir))
+
+    app = create_app(auto_run_jobs=False)
+    original = app.state.jobs.create(
+        ["03541629000137", "21746991000126"],
+        upload_id="upload-1",
+        source_name="sample.xlsx",
+        filename="sample.xlsx",
+        output_path=str(output_dir / "sample-responsaveis.xlsx"),
+        existing_results=[
+            BatchResult(
+                input_cnpj="03.541.629/0001-37",
+                normalized_cnpj="03541629000137",
+                status="fetch_error",
+                error="timeout",
+            ),
+            BatchResult(
+                input_cnpj="21.746.991/0001-26",
+                normalized_cnpj="21746991000126",
+                status="success",
+            ),
+        ],
+    )
+    client = TestClient(app)
+
+    response = client.post(f"/api/jobs/{original.job_id}/retry-one", json={"cnpj": "03.541.629/0001-37"})
+
+    assert response.status_code == 200
+    retry_job = response.json()
+    assert retry_job["input_cnpjs"] == ["03541629000137"]
+    assert retry_job["upload_id"] == "upload-1"
+    assert retry_job["filename"] == "sample.xlsx"
+    assert retry_job["output_path"].endswith("sample-responsaveis.xlsx")
+
+
+def test_retry_failed_endpoint_uses_checkpoint_results_for_source_jobs(tmp_path, monkeypatch):
+    input_dir = tmp_path / "cnpj"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    monkeypatch.setenv("CNPJ_TOOL_INPUT_DIR", str(input_dir))
+    monkeypatch.setenv("CNPJ_TOOL_OUTPUT_DIR", str(output_dir))
+
+    app = create_app(auto_run_jobs=False)
+    original = app.state.jobs.create(
+        ["03541629000137"],
+        upload_id="upload-1",
+        source_name="sample.xlsx",
+        filename="sample.xlsx",
+        output_path=str(output_dir / "sample-responsaveis.xlsx"),
+        existing_results=[
+            BatchResult(
+                input_cnpj="03.541.629/0001-37",
+                normalized_cnpj="03541629000137",
+                status="fetch_error",
+                error="stale timeout",
+            )
+        ],
+    )
+
+    class FakeStore:
+        def load_results(self, upload_id):
+            assert upload_id == "upload-1"
+            return [
+                BatchResult(
+                    input_cnpj="03.541.629/0001-37",
+                    normalized_cnpj="03541629000137",
+                    status="success",
+                )
+            ]
+
+    monkeypatch.setattr(server_module, "get_checkpoint_store", lambda _app: FakeStore())
+    client = TestClient(app)
+
+    response = client.post(f"/api/jobs/{original.job_id}/retry-failed")
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "This job has no failed CNPJ values"
+
+
+def test_source_file_summary_clears_abnormal_after_successful_retry(tmp_path, monkeypatch):
+    input_dir = tmp_path / "cnpj"
+    output_dir = tmp_path / "output"
+    checkpoint_dir = tmp_path / "checkpoints"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    checkpoint_dir.mkdir()
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "batch1"
+    sheet.append(["公司名称", "CNPJ"])
+    sheet.append(["Empresa Teste", "03.541.629/0001-37"])
+    source_path = input_dir / "sample.xlsx"
+    workbook.save(source_path)
+    workbook.close()
+    monkeypatch.setenv("CNPJ_TOOL_INPUT_DIR", str(input_dir))
+    monkeypatch.setenv("CNPJ_TOOL_OUTPUT_DIR", str(output_dir))
+    monkeypatch.setenv("CNPJ_TOOL_CHECKPOINT_DIR", str(checkpoint_dir))
+
+    class FakeAnalyzer:
+        def __init__(self):
+            self.calls = 0
+
+        def analyze_many(self, cnpjs, existing_results=None, on_result=None, should_stop=None):
+            self.calls += 1
+            status = "fetch_error" if self.calls == 1 else "success"
+            result = BatchResult(
+                input_cnpj="03.541.629/0001-37",
+                normalized_cnpj="03541629000137",
+                status=status,
+                error="timeout" if status != "success" else "",
+                company=CompanyData(
+                    cnpj="03541629000137",
+                    formatted_cnpj="03.541.629/0001-37",
+                    url="https://cnpj.biz/03541629000137",
+                    legal_name="Empresa Teste LTDA",
+                ) if status == "success" else None,
+                responsible=ResponsibleResult(
+                    names=["Maria Teste"],
+                    role="Socio-Administrador",
+                    confidence=0.91,
+                    reasoning="rule",
+                    analysis_source="rule_fallback",
+                ) if status == "success" else None,
+            )
+            if on_result:
+                on_result(result)
+            return [result]
+
+    analyzer = FakeAnalyzer()
+    monkeypatch.setattr(server_module, "build_analyzer", lambda: analyzer)
+
+    client = TestClient(create_app())
+    first = client.post("/api/jobs", json={"source_name": "sample.xlsx"})
+    assert first.status_code == 200
+    original_job_id = first.json()["job_id"]
+    first_job = client.get(f"/api/jobs/{original_job_id}").json()
+    assert first_job["status"] == "completed"
+
+    summary_after_fail = client.get("/api/source-files").json()["files"][0]
+    assert summary_after_fail["abnormal_count"] == 1
+    assert summary_after_fail["normal_count"] == 0
+
+    retry = client.post(f"/api/jobs/{original_job_id}/retry-failed")
+    assert retry.status_code == 200
+    retry_job_id = retry.json()["job_id"]
+    retried_job = client.get(f"/api/jobs/{retry_job_id}").json()
+    assert retried_job["status"] == "completed"
+
+    summary_after_retry = client.get("/api/source-files").json()["files"][0]
+    assert summary_after_retry["abnormal_count"] == 0
+    assert summary_after_retry["normal_count"] == 1
+
+    retry_again = client.post(f"/api/jobs/{original_job_id}/retry-failed")
+    assert retry_again.status_code == 400
+    assert retry_again.json()["detail"] == "This job has no failed CNPJ values"
+
+
 def test_settings_endpoint_updates_env_backed_runtime_settings(tmp_path, monkeypatch):
     env_path = tmp_path / ".env"
     env_path.write_text(
@@ -395,6 +703,71 @@ def test_settings_endpoint_updates_active_blurpath_proxy_node_pool(tmp_path, mon
     proxy = client.get("/api/health").json()["browser_proxy"]
     assert proxy["ports"] == [15129]
     assert proxy["node_count"] == 1
+
+
+def test_settings_endpoint_updates_direct_blurpath_proxy_runtime_fields(tmp_path, monkeypatch):
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "\n".join(
+            [
+                "LLM_API_KEY=old-key",
+                "LLM_MODEL=gpt-5.4-mini",
+                "CNPJ_PROVIDER_ORDER=brasilapi,cnpjbiz",
+                "BLURPATH_PROXY_HOST=old.blurpath.net",
+                "BLURPATH_PROXY_PORT=15121",
+                "BLURPATH_PROXY_PORTS=15121",
+                "BLURPATH_PROXY_PROTOCOL=http",
+                "BLURPATH_PROXY_USERNAME=acct-old",
+                "BLURPATH_PROXY_PASSWORD=old-secret",
+                "BLURPATH_PROXY_NODES=",
+                "BLURPATH_PROXY_REGION=BR",
+                "BLURPATH_PROXY_SESSION_TIME_MINUTES=10",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CNPJ_TOOL_ENV_FILE", str(env_path))
+
+    client = TestClient(create_app(auto_run_jobs=False))
+
+    initial = client.get("/api/settings")
+    assert initial.status_code == 200
+    assert initial.json()["blurpath_proxy_host"] == "old.blurpath.net"
+    assert initial.json()["blurpath_proxy_username"] == "acct-old"
+    assert initial.json()["blurpath_proxy_password"] == "<set>"
+    assert initial.json()["blurpath_proxy_region"] == "BR"
+    assert initial.json()["blurpath_proxy_protocol"] == "http"
+    assert initial.json()["blurpath_proxy_session_time_minutes"] == 10
+    assert "old-secret" not in initial.text
+
+    updated = client.put(
+        "/api/settings",
+        json={
+            "blurpath_proxy_host": "new.blurpath.net",
+            "blurpath_proxy_ports": [15129, 15121],
+            "blurpath_proxy_protocol": "socks5",
+            "blurpath_proxy_username": "acct-new",
+            "blurpath_proxy_password": "new-secret",
+            "blurpath_proxy_region": "US",
+            "blurpath_proxy_session_time_minutes": 20,
+        },
+    )
+
+    assert updated.status_code == 200
+    assert updated.json()["blurpath_proxy_host"] == "new.blurpath.net"
+    assert updated.json()["blurpath_proxy_username"] == "acct-new"
+    assert updated.json()["blurpath_proxy_password"] == "<set>"
+    assert updated.json()["blurpath_proxy_region"] == "US"
+    assert updated.json()["blurpath_proxy_protocol"] == "socks5"
+    assert updated.json()["blurpath_proxy_session_time_minutes"] == 20
+    assert "new-secret" not in updated.text
+    content = env_path.read_text(encoding="utf-8")
+    assert "BLURPATH_PROXY_HOST=new.blurpath.net" in content
+    assert "BLURPATH_PROXY_PROTOCOL=socks5" in content
+    assert "BLURPATH_PROXY_USERNAME=acct-new" in content
+    assert "BLURPATH_PROXY_PASSWORD=new-secret" in content
+    assert "BLURPATH_PROXY_REGION=US" in content
+    assert "BLURPATH_PROXY_SESSION_TIME_MINUTES=20" in content
 
 
 def test_proxy_preflight_reports_each_blurpath_port_without_secrets(tmp_path, monkeypatch):

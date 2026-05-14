@@ -308,9 +308,23 @@ def update_runtime_settings(
     llm_fallback_models: list[str] | None = None,
     system_concurrency: int | None = None,
     blurpath_proxy_ports: list[int] | None = None,
+    blurpath_proxy_host: str | None = None,
+    blurpath_proxy_protocol: str | None = None,
+    blurpath_proxy_username: str | None = None,
+    blurpath_proxy_password: str | None = None,
+    blurpath_proxy_region: str | None = None,
+    blurpath_proxy_session_time_minutes: int | None = None,
 ) -> Settings:
     updates: dict[str, str] = {}
-    current_settings = load_settings() if blurpath_proxy_ports is not None else None
+    current_settings = load_settings() if (
+        blurpath_proxy_ports is not None
+        or blurpath_proxy_host is not None
+        or blurpath_proxy_protocol is not None
+        or blurpath_proxy_username is not None
+        or blurpath_proxy_password is not None
+        or blurpath_proxy_region is not None
+        or blurpath_proxy_session_time_minutes is not None
+    ) else None
     if llm_api_key is not None and llm_api_key.strip() != "<set>":
         updates["LLM_API_KEY"] = llm_api_key
     if llm_model is not None:
@@ -329,6 +343,32 @@ def update_runtime_settings(
                     raise ValueError(f"Unsupported Blurpath proxy port: {port}")
         updates["BLURPATH_PROXY_PORTS"] = ",".join(str(port) for port in ports)
         updates["BLURPATH_PROXY_PORT"] = str(ports[0])
+    direct_proxy_updated = False
+    if blurpath_proxy_host is not None:
+        updates["BLURPATH_PROXY_HOST"] = blurpath_proxy_host.strip()
+        direct_proxy_updated = True
+    if blurpath_proxy_protocol is not None:
+        protocol = (blurpath_proxy_protocol.strip().casefold() or "http")
+        if protocol == "https":
+            protocol = "http"
+        if protocol not in {"http", "socks5"}:
+            raise ValueError(f"Unsupported Blurpath proxy protocol: {blurpath_proxy_protocol}")
+        updates["BLURPATH_PROXY_PROTOCOL"] = protocol
+        direct_proxy_updated = True
+    if blurpath_proxy_username is not None:
+        updates["BLURPATH_PROXY_USERNAME"] = blurpath_proxy_username.strip()
+        direct_proxy_updated = True
+    if blurpath_proxy_password is not None and blurpath_proxy_password.strip() != "<set>":
+        updates["BLURPATH_PROXY_PASSWORD"] = blurpath_proxy_password
+        direct_proxy_updated = True
+    if blurpath_proxy_region is not None:
+        updates["BLURPATH_PROXY_REGION"] = blurpath_proxy_region.strip().upper()
+        direct_proxy_updated = True
+    if blurpath_proxy_session_time_minutes is not None:
+        updates["BLURPATH_PROXY_SESSION_TIME_MINUTES"] = str(max(1, int(blurpath_proxy_session_time_minutes)))
+        direct_proxy_updated = True
+    if direct_proxy_updated:
+        updates["BLURPATH_PROXY_NODES"] = ""
     if updates:
         update_env_settings(updates)
     return load_settings()
