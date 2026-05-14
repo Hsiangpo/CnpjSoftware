@@ -104,6 +104,60 @@ def test_analyze_many_uses_unified_concurrency_for_fetch_and_llm():
     assert 1 < max_active <= 2
 
 
+def test_analyze_one_counts_rule_fallback_with_name_as_success_after_llm_failure():
+    def fetch_company(cnpj: str) -> CompanyData:
+        return CompanyData(
+            cnpj=cnpj,
+            formatted_cnpj="03.541.629/0001-37",
+            url=f"https://cnpj.biz/{cnpj}",
+            legal_name="Empresa Teste",
+            candidates=[Candidate(name="Maria Fallback", role="Socio-Administrador")],
+        )
+
+    def fail_llm(_company: CompanyData) -> ResponsibleResult:
+        raise ValueError("LLM request failed with HTTP 403")
+
+    analyzer = CompanyAnalyzer(
+        fetch_company=fetch_company,
+        analyze_with_llm=fail_llm,
+        request_delay_seconds=0,
+    )
+
+    result = analyzer.analyze_one("03.541.629/0001-37")
+
+    assert result.status == "success"
+    assert result.error == "LLM request failed with HTTP 403"
+    assert result.responsible
+    assert result.responsible.analysis_source == "rule_fallback"
+    assert result.responsible.names == ["Maria Fallback"]
+
+
+def test_analyze_one_keeps_partial_success_when_rule_fallback_has_no_name_after_llm_failure():
+    def fetch_company(cnpj: str) -> CompanyData:
+        return CompanyData(
+            cnpj=cnpj,
+            formatted_cnpj="03.541.629/0001-37",
+            url=f"https://cnpj.biz/{cnpj}",
+            legal_name="Empresa Teste",
+            candidates=[],
+        )
+
+    def fail_llm(_company: CompanyData) -> ResponsibleResult:
+        raise ValueError("LLM request failed with HTTP 403")
+
+    analyzer = CompanyAnalyzer(
+        fetch_company=fetch_company,
+        analyze_with_llm=fail_llm,
+        request_delay_seconds=0,
+    )
+
+    result = analyzer.analyze_one("03.541.629/0001-37")
+
+    assert result.status == "partial_success"
+    assert result.responsible
+    assert result.responsible.names == []
+
+
 def test_analyze_many_stops_without_starting_remaining_work():
     processed = []
 

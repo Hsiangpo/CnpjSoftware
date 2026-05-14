@@ -210,3 +210,23 @@ class BatchResult:
             error=str(payload.get("error", "")),
             provider_trace=[ProviderTraceEntry.from_dict(item) for item in payload.get("provider_trace", [])],
         )
+
+
+def has_responsible_name(result: BatchResult) -> bool:
+    responsible = result.responsible
+    if responsible is None:
+        return False
+    return any(str(name or "").strip() for name in responsible.names)
+
+
+def is_business_success(result: BatchResult) -> bool:
+    if result.status == "success":
+        return True
+    if result.status != "partial_success":
+        return False
+    responsible = result.responsible
+    return bool(
+        responsible
+        and responsible.analysis_source == "rule_fallback"
+        and has_responsible_name(result)
+    )

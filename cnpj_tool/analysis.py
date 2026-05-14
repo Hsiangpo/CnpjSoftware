@@ -102,10 +102,11 @@ class CompanyAnalyzer:
             except Exception as exc:
                 fallback = choose_rule_based_responsible(company.candidates)
                 fallback.reasoning = f"LLM falhou ({exc}); foi usada a hierarquia local de cargos."
+                status = "success" if any(name.strip() for name in fallback.names) else "partial_success"
                 return BatchResult(
                     input_cnpj=format_cnpj(cnpj),
                     normalized_cnpj=cnpj,
-                    status="partial_success",
+                    status=status,
                     company=company,
                     responsible=fallback,
                     error=str(exc),

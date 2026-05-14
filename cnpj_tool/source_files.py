@@ -5,6 +5,7 @@ from pathlib import Path
 
 from .checkpoints import CheckpointStore
 from .importer import UploadDetails, parse_upload_details
+from .models import is_business_success
 
 
 SUPPORTED_SOURCE_SUFFIXES = {".txt", ".csv", ".xlsx"}
@@ -78,7 +79,7 @@ def list_source_files(root: Path, checkpoints: CheckpointStore, output_root: Pat
         upload_id = checkpoints.build_upload_id(path.name, data, details.cnpjs)
         resume = checkpoints.get_resume_state(upload_id).to_dict()
         results = checkpoints.load_results(upload_id)
-        normal_count = sum(1 for result in results if result.status == "success")
+        normal_count = sum(1 for result in results if is_business_success(result))
         abnormal_count = max(0, len(results) - normal_count)
         output_name = output_filename_for(path.name, details.source_type)
         output_path = output_root / output_name

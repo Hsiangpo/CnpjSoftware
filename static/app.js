@@ -122,12 +122,25 @@ function uniqueInputCount(items) {
   return keys.size;
 }
 
+function hasResponsibleName(item) {
+  const names = item?.responsible?.names;
+  return Array.isArray(names) && names.some((name) => String(name || "").trim());
+}
+
+function isBusinessSuccess(item) {
+  if (!item) return false;
+  if (item.status === "success") return true;
+  return item.status === "partial_success"
+    && item?.responsible?.analysis_source === "rule_fallback"
+    && hasResponsibleName(item);
+}
+
 function hardFailedResults(results = state.lastResults) {
-  return uniqueItemsByCnpj(results).filter((item) => !["success", "partial_success"].includes(item.status));
+  return uniqueItemsByCnpj(results).filter((item) => !isBusinessSuccess(item) && item.status !== "partial_success");
 }
 
 function abnormalResults(results = state.lastResults) {
-  return uniqueItemsByCnpj(results).filter((item) => item.status !== "success");
+  return uniqueItemsByCnpj(results).filter((item) => !isBusinessSuccess(item));
 }
 
 function queuedSources() {
@@ -195,7 +208,7 @@ function renderMetrics(job = state.lastJob) {
     const uniqueResults = uniqueItemsByCnpj(results);
     const completed = uniqueResults.length;
     const pending = Math.max(0, uniqueInputCount(job.input_cnpjs) - completed);
-    const normal = uniqueResults.filter((item) => item.status === "success").length;
+    const normal = uniqueResults.filter((item) => isBusinessSuccess(item)).length;
     const abnormal = completed - normal;
     els.inputCount.textContent = String(pending);
     els.doneCount.textContent = String(completed);
@@ -464,7 +477,7 @@ function latestRuntimeResult(results) {
 function deriveRuntime(job) {
   const results = Array.isArray(job?.results) ? job.results : [];
   const total = Array.isArray(job?.input_cnpjs) ? job.input_cnpjs.length : 0;
-  const successCount = results.filter((item) => item.status === "success" || item.status === "partial_success").length;
+  const successCount = results.filter((item) => isBusinessSuccess(item) || item.status === "partial_success").length;
   const last = latestRuntimeResult(results);
   let provider = "-";
   let port = "-";
@@ -500,13 +513,13 @@ function renderRuntime(job) {
 function applyResultFilter(results) {
   const rows = Array.isArray(results) ? results : [];
   if (state.resultFilter === "issues") {
-    return rows.filter((item) => !["success", "partial_success"].includes(item.status));
+    return rows.filter((item) => !isBusinessSuccess(item) && item.status !== "partial_success");
   }
   if (state.resultFilter === "partial") {
-    return rows.filter((item) => item.status === "partial_success");
+    return rows.filter((item) => item.status === "partial_success" && !isBusinessSuccess(item));
   }
   if (state.resultFilter === "success") {
-    return rows.filter((item) => item.status === "success");
+    return rows.filter((item) => isBusinessSuccess(item));
   }
   return rows;
 }
@@ -583,7 +596,9 @@ function renderResults(job) {
     const names = (responsible.names || []).join("; ");
     const companyName = company.trade_name || company.legal_name || "";
     const url = company.url || `https://cnpj.biz/${item.normalized_cnpj}`;
-    const issueText = item.error || "";
+    const businessSuccess = isBusinessSuccess(item);
+    const displayStatus = businessSuccess ? "success" : item.status;
+    const issueText = businessSuccess ? "" : (item.error || "");
     const analysisMeta = responsible.analysis_source
       ? `<div class="status-meta">${escapeHtml(responsible.analysis_source)}${responsible.model_used ? ` · ${escapeHtml(responsible.model_used)}` : ""}</div>`
       : "";
@@ -592,10 +607,10 @@ function renderResults(job) {
       : "";
       
     let statusClass = "status-neutral";
-    if(item.status === "success") statusClass = "status-success";
-    if(item.status === "partial_success" || item.status === "blocked_by_cloudflare") statusClass = "status-warning";
+    if(businessSuccess) statusClass = "status-success";
+    if(!businessSuccess && (item.status === "partial_success" || item.status === "blocked_by_cloudflare")) statusClass = "status-warning";
     if(item.status === "failed" || item.status === "fetch_error" || item.status === "not_found") statusClass = "status-danger";
-    const retryAction = item.status === "success"
+    const retryAction = businessSuccess
       ? ""
       : `<div style="margin-top:8px;"><button class="btn btn-secondary btn-xs retry-single-button" data-cnpj="${escapeHtml(item.normalized_cnpj || item.input_cnpj || "")}" type="button">重跑本条</button></div>`;
 
@@ -610,7 +625,7 @@ function renderResults(job) {
         <td>${escapeHtml(names || "-")}</td>
         <td>${escapeHtml(responsible.role || "-")}</td>
         <td class="status-cell">
-          <span class="status-badge ${statusClass}">${escapeHtml(statusLabel(item.status))}</span>
+          <span class="status-badge ${statusClass}">${escapeHtml(statusLabel(displayStatus))}</span>
           ${issueText ? `<div class="status-detail">${escapeHtml(issueText)}</div>` : ""}
           ${analysisMeta}
           ${retryAction}

@@ -485,6 +485,62 @@ def test_retry_failed_endpoint_includes_partial_success_and_dedupes(tmp_path, mo
     assert retry_job["input_cnpjs"] == ["03541629000137", "21746991000126"]
 
 
+def test_retry_failed_endpoint_skips_rule_fallback_with_responsible_name(tmp_path, monkeypatch):
+    input_dir = tmp_path / "cnpj"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    monkeypatch.setenv("CNPJ_TOOL_INPUT_DIR", str(input_dir))
+    monkeypatch.setenv("CNPJ_TOOL_OUTPUT_DIR", str(output_dir))
+
+    app = create_app(auto_run_jobs=False)
+    rule_fallback_success = BatchResult(
+        input_cnpj="03.541.629/0001-37",
+        normalized_cnpj="03541629000137",
+        status="partial_success",
+        error="LLM request failed with HTTP 403",
+        responsible=ResponsibleResult(
+            names=["Maria Fallback"],
+            role="Socio-Administrador",
+            confidence=0.84,
+            reasoning="rule",
+            analysis_source="rule_fallback",
+        ),
+    )
+    partial_without_name = BatchResult(
+        input_cnpj="04.252.011/0001-10",
+        normalized_cnpj="04252011000110",
+        status="partial_success",
+        error="LLM request failed with HTTP 403",
+        responsible=ResponsibleResult(
+            names=[],
+            role="",
+            confidence=0,
+            reasoning="no candidate",
+            analysis_source="rule_fallback",
+        ),
+    )
+    failed = BatchResult(
+        input_cnpj="21.746.991/0001-26",
+        normalized_cnpj="21746991000126",
+        status="fetch_error",
+        error="timeout",
+    )
+    original = app.state.jobs.create(
+        ["03541629000137", "04252011000110", "21746991000126"],
+        filename="sample.xlsx",
+        source_name="sample.xlsx",
+        existing_results=[rule_fallback_success, partial_without_name, failed],
+    )
+    client = TestClient(app)
+
+    response = client.post(f"/api/jobs/{original.job_id}/retry-failed")
+
+    assert response.status_code == 200
+    retry_job = response.json()
+    assert retry_job["input_cnpjs"] == ["04252011000110", "21746991000126"]
+
+
 def test_retry_failed_endpoint_reuses_original_source_output_for_directory_jobs(tmp_path, monkeypatch):
     input_dir = tmp_path / "cnpj"
     output_dir = tmp_path / "output"

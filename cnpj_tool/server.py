@@ -20,7 +20,7 @@ from .cnpj import dedupe_preserve_order, extract_cnpjs, normalize_cnpj, validate
 from .config import load_settings, update_runtime_settings
 from .jobs import JobStore
 from .llm import LLMClient
-from .models import BatchResult
+from .models import BatchResult, is_business_success
 from .providers import build_company_client
 from .source_files import list_output_files, list_source_files, load_source_file, output_filename_for
 
@@ -538,7 +538,7 @@ def create_app(auto_run_jobs: bool = True) -> FastAPI:
         failed_cnpjs = [
             item.normalized_cnpj
             for item in source_results
-            if item.status != "success"
+            if not is_business_success(item)
         ]
         failed_cnpjs = dedupe_preserve_order(failed_cnpjs)
         if not failed_cnpjs:

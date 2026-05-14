@@ -12,7 +12,7 @@ from pathlib import Path
 from openpyxl import load_workbook
 
 from .cnpj import dedupe_preserve_order, normalize_cnpj
-from .models import BatchResult
+from .models import BatchResult, is_business_success
 
 
 @dataclass
@@ -210,7 +210,7 @@ class CheckpointStore:
                 role = "; ".join(
                     result.responsible.role for result in matched_results if result.responsible and result.responsible.role
                 )
-                status = "; ".join(result.status for result in matched_results)
+                status = "; ".join("success" if is_business_success(result) else result.status for result in matched_results)
                 source = "; ".join(
                     result.responsible.analysis_source for result in matched_results if result.responsible
                 )
@@ -249,7 +249,7 @@ class CheckpointStore:
                     (company.trade_name or company.legal_name) if company else "",
                     "; ".join(responsible.names) if responsible else "",
                     responsible.role if responsible else "",
-                    item.status,
+                    "success" if is_business_success(item) else item.status,
                     responsible.analysis_source if responsible else "",
                     responsible.model_used if responsible else "",
                     (company.url if company else "") or f"https://cnpj.biz/{item.normalized_cnpj}",

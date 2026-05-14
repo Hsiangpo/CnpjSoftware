@@ -229,8 +229,8 @@ console.log(JSON.stringify({{
 
     assert payload["pending"] == "1"
     assert payload["completed"] == "3"
-    assert payload["normal"] == "1"
-    assert payload["abnormal"] == "2"
+    assert payload["normal"] == "2"
+    assert payload["abnormal"] == "1"
     assert "gpt-5.4-mini" in payload["html"]
     assert "rule_fallback" in payload["html"]
     assert 'class="reason-text">fallback<' not in payload["html"]
@@ -344,8 +344,8 @@ console.log(JSON.stringify({{
 
     assert payload["pending"] == "0"
     assert payload["completed"] == "3"
-    assert payload["normal"] == "1"
-    assert payload["abnormal"] == "2"
+    assert payload["normal"] == "2"
+    assert payload["abnormal"] == "1"
     assert payload["retryDisabled"] is False
 
 
