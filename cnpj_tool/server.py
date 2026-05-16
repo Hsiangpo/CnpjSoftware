@@ -433,8 +433,8 @@ def create_app(auto_run_jobs: bool = True) -> FastAPI:
         output_flush_batch_size = settings.output_flush_batch_size
         output_flush_interval_seconds = settings.output_flush_interval_seconds
         pending_output_flush_count = 0
-        last_output_flush_at = 0.0
-        has_materialized_output = False
+        last_output_flush_at = time.monotonic()
+        has_materialized_output = bool(job.output_path and Path(job.output_path).exists())
 
         def materialize_current_output(*, force: bool = False) -> None:
             nonlocal has_materialized_output, last_output_flush_at, pending_output_flush_count

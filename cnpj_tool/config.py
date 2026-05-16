@@ -280,8 +280,8 @@ def load_settings() -> Settings:
         checkpoint_dir=checkpoint_dir_path(),
         input_dir=input_dir_path(),
         output_dir=output_dir_path(),
-        output_flush_batch_size=max(1, int(os.getenv("OUTPUT_FLUSH_BATCH_SIZE", "50") or "50")),
-        output_flush_interval_seconds=max(1.0, float(os.getenv("OUTPUT_FLUSH_INTERVAL_SECONDS", "10") or "10")),
+        output_flush_batch_size=max(1, int(os.getenv("OUTPUT_FLUSH_BATCH_SIZE", "500") or "500")),
+        output_flush_interval_seconds=max(1.0, float(os.getenv("OUTPUT_FLUSH_INTERVAL_SECONDS", "120") or "120")),
     )
 
 

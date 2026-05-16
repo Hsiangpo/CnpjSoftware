@@ -462,6 +462,94 @@ def test_directory_backed_job_throttles_streaming_output_materialization(tmp_pat
     assert materialize_sizes == [1, 3]
 
 
+def test_directory_backed_job_skips_initial_rebuild_when_output_exists(tmp_path, monkeypatch):
+    input_dir = tmp_path / "cnpj"
+    output_dir = tmp_path / "output"
+    checkpoint_dir = tmp_path / "checkpoints"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    checkpoint_dir.mkdir()
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "batch1"
+    sheet.append(["Company", "CNPJ"])
+    sheet.append(["Empresa Um", "03.541.629/0001-37"])
+    sheet.append(["Empresa Dois", "21.746.991/0001-26"])
+    source_path = input_dir / "sample.xlsx"
+    output_path = output_dir / "sample-responsaveis.xlsx"
+    workbook.save(source_path)
+    workbook.close()
+    output_path.write_bytes(b"already exists")
+    monkeypatch.setenv("CNPJ_TOOL_INPUT_DIR", str(input_dir))
+    monkeypatch.setenv("CNPJ_TOOL_OUTPUT_DIR", str(output_dir))
+    monkeypatch.setenv("CNPJ_TOOL_CHECKPOINT_DIR", str(checkpoint_dir))
+    monkeypatch.setenv("OUTPUT_FLUSH_BATCH_SIZE", "50")
+    monkeypatch.setenv("OUTPUT_FLUSH_INTERVAL_SECONDS", "3600")
+
+    class StreamingAnalyzer:
+        def analyze_many(self, cnpjs, existing_results=None, on_result=None, should_stop=None):
+            assert on_result is not None
+            results = [
+                BatchResult(
+                    input_cnpj="03.541.629/0001-37",
+                    normalized_cnpj="03541629000137",
+                    status="success",
+                    company=CompanyData(
+                        cnpj="03541629000137",
+                        formatted_cnpj="03.541.629/0001-37",
+                        url="https://cnpj.biz/03541629000137",
+                        legal_name="Empresa Um LTDA",
+                    ),
+                    responsible=ResponsibleResult(
+                        names=["Maria Um"],
+                        role="Diretor",
+                        confidence=0.91,
+                        reasoning="rule",
+                        analysis_source="rule_fallback",
+                    ),
+                ),
+                BatchResult(
+                    input_cnpj="21.746.991/0001-26",
+                    normalized_cnpj="21746991000126",
+                    status="success",
+                    company=CompanyData(
+                        cnpj="21746991000126",
+                        formatted_cnpj="21.746.991/0001-26",
+                        url="https://cnpj.biz/21746991000126",
+                        legal_name="Empresa Dois LTDA",
+                    ),
+                    responsible=ResponsibleResult(
+                        names=["Joao Dois"],
+                        role="Diretor",
+                        confidence=0.91,
+                        reasoning="rule",
+                        analysis_source="rule_fallback",
+                    ),
+                ),
+            ]
+            for result in results:
+                on_result(result)
+                assert materialize_sizes == []
+            return results
+
+    monkeypatch.setattr(server_module, "build_analyzer", lambda: StreamingAnalyzer())
+    app = create_app()
+    materialize_sizes = []
+    original_materialize_output = app.state.checkpoints.materialize_output
+
+    def counted_materialize_output(*args, **kwargs):
+        materialize_sizes.append(len(kwargs["results"]))
+        return original_materialize_output(*args, **kwargs)
+
+    monkeypatch.setattr(app.state.checkpoints, "materialize_output", counted_materialize_output)
+    client = TestClient(app)
+
+    created = client.post("/api/jobs", json={"source_name": "sample.xlsx"})
+
+    assert created.status_code == 200
+    assert materialize_sizes == [2]
+
+
 def test_retry_failed_endpoint_creates_retry_job_with_failed_cnpjs(tmp_path, monkeypatch):
     input_dir = tmp_path / "cnpj"
     output_dir = tmp_path / "output"
