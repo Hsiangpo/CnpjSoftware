@@ -68,6 +68,25 @@ def test_load_settings_parses_cnpjbiz_browser_identity(tmp_path, monkeypatch):
     assert settings.cnpj_biz_user_agent == "Mozilla/5.0 Chrome/146"
 
 
+def test_load_settings_parses_output_flush_throttle(tmp_path, monkeypatch):
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "\n".join(
+            [
+                "OUTPUT_FLUSH_BATCH_SIZE=25",
+                "OUTPUT_FLUSH_INTERVAL_SECONDS=7.5",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CNPJ_TOOL_ENV_FILE", str(env_path))
+
+    settings = load_settings()
+
+    assert settings.output_flush_batch_size == 25
+    assert settings.output_flush_interval_seconds == 7.5
+
+
 def test_project_root_uses_exe_directory_when_frozen(tmp_path, monkeypatch):
     exe_path = tmp_path / "CnpjResponsavelTool.exe"
     monkeypatch.setattr(config_module.sys, "frozen", True, raising=False)

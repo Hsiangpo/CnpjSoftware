@@ -4,6 +4,7 @@ import sys
 import platform
 import shutil
 import subprocess
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -428,8 +429,23 @@ def create_app(auto_run_jobs: bool = True) -> FastAPI:
     def run_job(job_id: str) -> None:
         analyzer = get_or_build_analyzer(app)
         job = app.state.jobs.get(job_id)
+        settings = load_settings()
+        output_flush_batch_size = settings.output_flush_batch_size
+        output_flush_interval_seconds = settings.output_flush_interval_seconds
+        pending_output_flush_count = 0
+        last_output_flush_at = 0.0
+        has_materialized_output = False
 
-        def materialize_current_output() -> None:
+        def materialize_current_output(*, force: bool = False) -> None:
+            nonlocal has_materialized_output, last_output_flush_at, pending_output_flush_count
+            now = time.monotonic()
+            if (
+                not force
+                and has_materialized_output
+                and pending_output_flush_count < output_flush_batch_size
+                and now - last_output_flush_at < output_flush_interval_seconds
+            ):
+                return
             current_job = app.state.jobs.get(job_id)
             if not current_job.upload_id or not current_job.output_path:
                 return
@@ -443,8 +459,12 @@ def create_app(auto_run_jobs: bool = True) -> FastAPI:
                 results=full_results,
             )
             app.state.jobs.set_output_path(job_id, str(output_path))
+            has_materialized_output = True
+            last_output_flush_at = time.monotonic()
+            pending_output_flush_count = 0
 
         def persist_result(result: BatchResult) -> None:
+            nonlocal pending_output_flush_count
             if not job.upload_id:
                 return
             get_checkpoint_store(app).upsert_result(
@@ -453,13 +473,14 @@ def create_app(auto_run_jobs: bool = True) -> FastAPI:
                 input_cnpjs=job.input_cnpjs,
                 result=result,
             )
+            pending_output_flush_count += 1
             try:
-                materialize_current_output()
+                materialize_current_output(force=not has_materialized_output)
             except Exception:
                 pass
 
         app.state.jobs.run(job_id, analyzer.analyze_many, on_result=persist_result)
-        materialize_current_output()
+        materialize_current_output(force=True)
 
     @app.post("/api/jobs")
     def create_job(request: JobRequest, background_tasks: BackgroundTasks) -> dict[str, Any]:
