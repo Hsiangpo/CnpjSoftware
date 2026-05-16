@@ -1,6 +1,7 @@
 const state = {
   jobId: null,
   pollTimer: null,
+  pollInFlight: false,
   lastResults: [],
   lastJob: null,
   currentPage: 1,
@@ -861,7 +862,7 @@ function beginPolling(jobId) {
   }
   state.pollTimer = window.setInterval(() => {
     pollJob(jobId);
-  }, 900);
+  }, 5000);
 }
 
 async function handleCreatedJob(job) {
@@ -1036,7 +1037,8 @@ async function stopJob() {
 }
 
 async function pollJob(expectedJobId = state.jobId) {
-  if (!expectedJobId) return;
+  if (!expectedJobId || state.pollInFlight) return;
+  state.pollInFlight = true;
   try {
     const response = await fetch(`/api/jobs/${expectedJobId}`);
     const job = await readJsonResponse(response, "任务状态读取失败");
@@ -1051,6 +1053,8 @@ async function pollJob(expectedJobId = state.jobId) {
     markActiveQueueItem("failed", expectedJobId);
     els.jobStatus.textContent = error.message;
     syncRunButtons();
+  } finally {
+    state.pollInFlight = false;
   }
 }
 
