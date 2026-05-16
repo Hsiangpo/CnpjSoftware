@@ -55,6 +55,7 @@ class CheckpointStore:
         self.root = root
         self.root.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
+        self._payload_cache: dict[str, dict] = {}
 
     def build_upload_id(self, filename: str, data: bytes, cnpjs: list[str]) -> str:
         digest = hashlib.sha256()
@@ -73,10 +74,18 @@ class CheckpointStore:
         return self.root / f"{upload_id}{suffix}"
 
     def _load_payload(self, upload_id: str) -> dict | None:
+        cached = self._payload_cache.get(upload_id)
+        if cached is not None:
+            return cached
         path = self._path(upload_id)
         if not path.exists():
             return None
-        return json.loads(path.read_text(encoding="utf-8"))
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        self._payload_cache[upload_id] = payload
+        return payload
+
+    def _dump_payload(self, payload: dict) -> str:
+        return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
     def _write_text_atomic(self, path: Path, content: str) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -108,6 +117,8 @@ class CheckpointStore:
             if updated_at > newest_updated_at:
                 newest = payload
                 newest_updated_at = updated_at
+                if payload.get("upload_id"):
+                    self._payload_cache[str(payload["upload_id"])] = payload
         return newest
 
     def register_upload(
@@ -134,7 +145,8 @@ class CheckpointStore:
         payload["updated_at"] = time.time()
         with self._lock:
             self._source_path(upload_id, filename).write_bytes(data)
-            self._write_text_atomic(self._path(upload_id), json.dumps(payload, ensure_ascii=False, indent=2))
+            self._payload_cache[upload_id] = payload
+            self._write_text_atomic(self._path(upload_id), self._dump_payload(payload))
 
     def get_resume_state(self, upload_id: str) -> ResumeState:
         payload = self._load_payload(upload_id)
@@ -213,7 +225,8 @@ class CheckpointStore:
         }
         path = self._path(upload_id)
         with self._lock:
-            self._write_text_atomic(path, json.dumps(payload, ensure_ascii=False, indent=2))
+            self._payload_cache[upload_id] = payload
+            self._write_text_atomic(path, self._dump_payload(payload))
 
     def upsert_result(
         self,
@@ -223,20 +236,23 @@ class CheckpointStore:
         input_cnpjs: list[str],
         result: BatchResult,
     ) -> None:
-        normalized = dedupe_preserve_order([normalize_cnpj(item) for item in input_cnpjs])
         with self._lock:
-            payload = self._load_payload(upload_id) or {
-                "upload_id": upload_id,
-                "filename": filename,
-                "input_cnpjs": normalized,
-                "results": {},
-                "updated_at": 0.0,
-            }
+            payload = self._load_payload(upload_id)
+            if not payload:
+                payload = {
+                    "upload_id": upload_id,
+                    "filename": filename,
+                    "input_cnpjs": dedupe_preserve_order([normalize_cnpj(item) for item in input_cnpjs]),
+                    "results": {},
+                    "updated_at": 0.0,
+                }
             payload["filename"] = filename
-            payload["input_cnpjs"] = normalized
+            if not payload.get("input_cnpjs"):
+                payload["input_cnpjs"] = dedupe_preserve_order([normalize_cnpj(item) for item in input_cnpjs])
             payload["results"][result.normalized_cnpj] = result.to_dict()
             payload["updated_at"] = time.time()
-            self._write_text_atomic(self._path(upload_id), json.dumps(payload, ensure_ascii=False, indent=2))
+            self._payload_cache[upload_id] = payload
+            self._write_text_atomic(self._path(upload_id), self._dump_payload(payload))
 
     def build_enriched_xlsx(self, *, upload_id: str, results: list[BatchResult]) -> bytes:
         payload = self._load_payload(upload_id)
