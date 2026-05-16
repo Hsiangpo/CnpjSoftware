@@ -35,6 +35,21 @@ class ResumeState:
         }
 
 
+def _is_business_success_payload(data: dict | None) -> bool:
+    payload = data or {}
+    status = str(payload.get("status", ""))
+    if status == "success":
+        return True
+    if status != "partial_success":
+        return False
+    responsible = payload.get("responsible") or {}
+    names = responsible.get("names") or []
+    return bool(
+        responsible.get("analysis_source") == "rule_fallback"
+        and any(str(name or "").strip() for name in names)
+    )
+
+
 class CheckpointStore:
     def __init__(self, root: Path) -> None:
         self.root = root
@@ -63,6 +78,38 @@ class CheckpointStore:
             return None
         return json.loads(path.read_text(encoding="utf-8"))
 
+    def _write_text_atomic(self, path: Path, content: str) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+        try:
+            temp_path.write_text(content, encoding="utf-8")
+            temp_path.replace(path)
+        finally:
+            if temp_path.exists():
+                temp_path.unlink()
+
+    def find_registered_upload(self, *, filename: str, data: bytes) -> dict | None:
+        newest: dict | None = None
+        newest_updated_at = -1.0
+        for path in self.root.glob("*.json"):
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if payload.get("filename") != filename:
+                continue
+            source_path = Path(str(payload.get("source_path", "")))
+            try:
+                if not source_path.exists() or source_path.read_bytes() != data:
+                    continue
+            except OSError:
+                continue
+            updated_at = float(payload.get("updated_at", 0.0))
+            if updated_at > newest_updated_at:
+                newest = payload
+                newest_updated_at = updated_at
+        return newest
+
     def register_upload(
         self,
         *,
@@ -87,10 +134,13 @@ class CheckpointStore:
         payload["updated_at"] = time.time()
         with self._lock:
             self._source_path(upload_id, filename).write_bytes(data)
-            self._path(upload_id).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            self._write_text_atomic(self._path(upload_id), json.dumps(payload, ensure_ascii=False, indent=2))
 
     def get_resume_state(self, upload_id: str) -> ResumeState:
         payload = self._load_payload(upload_id)
+        return self._resume_state_from_payload(upload_id, payload)
+
+    def _resume_state_from_payload(self, upload_id: str, payload: dict | None) -> ResumeState:
         if not payload:
             return ResumeState(
                 upload_id=upload_id,
@@ -120,6 +170,16 @@ class CheckpointStore:
             completed=done_count == total and total > 0,
             updated_at=float(payload.get("updated_at", 0.0)),
         )
+
+    def get_progress_summary(self, upload_id: str) -> tuple[ResumeState, int, int]:
+        payload = self._load_payload(upload_id)
+        resume = self._resume_state_from_payload(upload_id, payload)
+        if not payload:
+            return resume, 0, 0
+        stored = payload.get("results", {})
+        normal_count = sum(1 for item in stored.values() if _is_business_success_payload(item))
+        abnormal_count = max(0, len(stored) - normal_count)
+        return resume, normal_count, abnormal_count
 
     def load_results(self, upload_id: str) -> list[BatchResult]:
         payload = self._load_payload(upload_id)
@@ -153,7 +213,7 @@ class CheckpointStore:
         }
         path = self._path(upload_id)
         with self._lock:
-            path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            self._write_text_atomic(path, json.dumps(payload, ensure_ascii=False, indent=2))
 
     def upsert_result(
         self,
@@ -176,7 +236,7 @@ class CheckpointStore:
             payload["input_cnpjs"] = normalized
             payload["results"][result.normalized_cnpj] = result.to_dict()
             payload["updated_at"] = time.time()
-            self._path(upload_id).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            self._write_text_atomic(self._path(upload_id), json.dumps(payload, ensure_ascii=False, indent=2))
 
     def build_enriched_xlsx(self, *, upload_id: str, results: list[BatchResult]) -> bytes:
         payload = self._load_payload(upload_id)

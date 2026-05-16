@@ -5,7 +5,6 @@ from pathlib import Path
 
 from .checkpoints import CheckpointStore
 from .importer import UploadDetails, parse_upload_details
-from .models import is_business_success
 
 
 SUPPORTED_SOURCE_SUFFIXES = {".txt", ".csv", ".xlsx"}
@@ -75,25 +74,32 @@ def list_source_files(root: Path, checkpoints: CheckpointStore, output_root: Pat
         if not path.is_file() or path.suffix.lower() not in SUPPORTED_SOURCE_SUFFIXES:
             continue
         data = path.read_bytes()
-        details = parse_upload_details(path.name, data)
-        upload_id = checkpoints.build_upload_id(path.name, data, details.cnpjs)
-        resume = checkpoints.get_resume_state(upload_id).to_dict()
-        results = checkpoints.load_results(upload_id)
-        normal_count = sum(1 for result in results if is_business_success(result))
-        abnormal_count = max(0, len(results) - normal_count)
-        output_name = output_filename_for(path.name, details.source_type)
+        registered = checkpoints.find_registered_upload(filename=path.name, data=data)
+        if registered:
+            upload_id = str(registered.get("upload_id", ""))
+            source_type = str(registered.get("source_type", path.suffix.lower().lstrip(".")))
+            cnpjs = [str(item) for item in registered.get("raw_input_cnpjs", [])]
+            unique_cnpjs = [str(item) for item in registered.get("input_cnpjs", [])]
+        else:
+            details = parse_upload_details(path.name, data)
+            upload_id = checkpoints.build_upload_id(path.name, data, details.cnpjs)
+            source_type = details.source_type
+            cnpjs = details.cnpjs
+            unique_cnpjs = list(dict.fromkeys(details.cnpjs))
+        resume_state, normal_count, abnormal_count = checkpoints.get_progress_summary(upload_id)
+        output_name = output_filename_for(path.name, source_type)
         output_path = output_root / output_name
         records.append(
             SourceFileRecord(
                 name=path.name,
                 path=path,
-                source_type=details.source_type,
-                count=len(details.cnpjs),
-                unique_count=len(dict.fromkeys(details.cnpjs)),
+                source_type=source_type,
+                count=len(cnpjs),
+                unique_count=len(unique_cnpjs),
                 upload_id=upload_id,
                 size_bytes=path.stat().st_size,
                 modified_at=path.stat().st_mtime,
-                resume=resume,
+                resume=resume_state.to_dict(),
                 output_name=output_name,
                 output_exists=output_path.exists(),
                 output_size_bytes=output_path.stat().st_size if output_path.exists() else 0,
