@@ -92,12 +92,29 @@ class CheckpointStore:
         temp_path = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
         try:
             temp_path.write_text(content, encoding="utf-8")
-            temp_path.replace(path)
+            for attempt in range(20):
+                try:
+                    temp_path.replace(path)
+                    return
+                except PermissionError:
+                    if attempt == 19:
+                        return
+                    time.sleep(0.05)
         finally:
             if temp_path.exists():
                 temp_path.unlink()
 
     def find_registered_upload(self, *, filename: str, data: bytes) -> dict | None:
+        for payload in self._payload_cache.values():
+            if payload.get("filename") != filename:
+                continue
+            source_path = Path(str(payload.get("source_path", "")))
+            try:
+                if source_path.exists() and source_path.read_bytes() == data:
+                    return payload
+            except OSError:
+                continue
+
         newest: dict | None = None
         newest_updated_at = -1.0
         for path in self.root.glob("*.json"):
