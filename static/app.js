@@ -195,12 +195,13 @@ function clearPollTimer() {
 function syncRunButtons() {
   const active = isRunActive();
   const hasQueued = queuedSources().length > 0;
+  const nameMode = state.lastJob?.mode === "name";
   els.startButton.disabled = active || (!hasQueued && !state.selectedSourceName);
   els.stopButton.disabled = !state.jobId || !isJobActive() || state.lastJob?.status === "canceling";
   els.clearButton.disabled = active;
   els.queueSourceButton.disabled = active || !state.selectedSourceName;
-  els.copyFailedButton.disabled = !hardFailedResults().length;
-  els.runFailedButton.disabled = active || !state.jobId || !isJobTerminal() || !abnormalResults().length;
+  els.copyFailedButton.disabled = nameMode || !hardFailedResults().length;
+  els.runFailedButton.disabled = nameMode || active || !state.jobId || !isJobTerminal() || !abnormalResults().length;
 }
 
 function renderMetrics(job = state.lastJob) {
@@ -373,6 +374,10 @@ function renderOutputFiles() {
 function buildFailedRetryQueueItem(job, retryAttempt) {
   const attempt = Number(retryAttempt || 0);
   if (!job || job.status !== "completed" || attempt < 1 || attempt > MAX_FAILED_RETRY_ROUNDS) {
+    return null;
+  }
+  // Failed-retry is CNPJ-keyed; name-mode "not found" rows can't be retried that way.
+  if (job.mode === "name") {
     return null;
   }
   const abnormal = abnormalResults(job.results || []);
