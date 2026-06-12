@@ -1,14 +1,44 @@
 from __future__ import annotations
 
-import threading
-import time
-import urllib.error
-import urllib.request
-import webbrowser
+import os
+import sys
+from pathlib import Path
 
-import uvicorn
 
-from cnpj_tool.server import app
+def _configure_playwright_browsers() -> None:
+    """Point Playwright at a real browser cache before it is imported.
+
+    In a PyInstaller bundle the default browser lookup resolves inside the
+    temporary ``_MEIxxxx`` extraction directory, which never contains the
+    downloaded browsers — so the headless scraper fails with "Executable
+    doesn't exist". Prefer a sibling ``ms-playwright`` folder shipped next to
+    the executable (self-contained), then fall back to the per-user install.
+    """
+    if os.environ.get("PLAYWRIGHT_BROWSERS_PATH"):
+        return
+    if not getattr(sys, "frozen", False):
+        return  # running from source: the default cache works
+    candidates = [Path(sys.executable).resolve().parent / "ms-playwright"]
+    local = os.environ.get("LOCALAPPDATA")
+    if local:
+        candidates.append(Path(local) / "ms-playwright")
+    for path in candidates:
+        if path.exists():
+            os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(path)
+            return
+
+
+_configure_playwright_browsers()
+
+import threading  # noqa: E402
+import time  # noqa: E402
+import urllib.error  # noqa: E402
+import urllib.request  # noqa: E402
+import webbrowser  # noqa: E402
+
+import uvicorn  # noqa: E402
+
+from cnpj_tool.server import app  # noqa: E402
 
 
 APP_HOST = "127.0.0.1"
