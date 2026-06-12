@@ -3,9 +3,10 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>CNPJ Batch Analyzer Console</title>
+    <title>CNPJ · 负责人分析台</title>
     <link rel="icon" href="data:," />
-    <link rel="stylesheet" href="/static/styles.css?v=20260514a" />
+    <meta name="theme-color" content="#14130e" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260613b" />
     <script src="/static/lucide.min.js?v=1.14.0"></script>
   </head>
   <body>
@@ -15,8 +16,8 @@
         <div class="brand-area">
           <div class="brand-logo"><i data-lucide="database"></i></div>
           <div class="brand-text">
-            <h1>CNPJ.BIZ</h1>
-            <p>Analyzer Console</p>
+            <h1>CNPJ·BIZ</h1>
+            <p>Responsáveis</p>
           </div>
         </div>
 
@@ -115,6 +116,10 @@
 
       <!-- Main Content -->
       <main class="main-content">
+        <header class="masthead">
+          <div class="masthead-title">批量分析控制台<em>Batch Console</em></div>
+          <div class="masthead-meta">127.0.0.1<b>:8765</b> · cnpj.biz</div>
+        </header>
         <div class="workspace-grid">
           <section class="workspace-side">
             <div class="panel queue-panel">
@@ -301,7 +306,7 @@
         </div>
       </main>
     </div>
-    <script src="/static/app.js?v=20260514a"></script>
+    <script src="/static/app.js?v=20260613b"></script>
     <script>
       if (window.lucide) {
         lucide.createIcons();
