@@ -186,9 +186,10 @@ class BatchResult:
     responsible: ResponsibleResult | None = None
     error: str = ""
     provider_trace: list[ProviderTraceEntry] = field(default_factory=list)
+    name_meta: dict | None = None
 
     def to_dict(self) -> dict:
-        return {
+        data = {
             "input_cnpj": self.input_cnpj,
             "normalized_cnpj": self.normalized_cnpj,
             "status": self.status,
@@ -197,6 +198,9 @@ class BatchResult:
             "error": self.error,
             "provider_trace": [entry.to_dict() for entry in self.provider_trace],
         }
+        if self.name_meta is not None:
+            data["name_meta"] = self.name_meta
+        return data
 
     @classmethod
     def from_dict(cls, data: dict | None) -> "BatchResult":
@@ -209,6 +213,7 @@ class BatchResult:
             responsible=ResponsibleResult.from_dict(payload.get("responsible")) if payload.get("responsible") else None,
             error=str(payload.get("error", "")),
             provider_trace=[ProviderTraceEntry.from_dict(item) for item in payload.get("provider_trace", [])],
+            name_meta=payload.get("name_meta"),
         )
 
 

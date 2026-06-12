@@ -526,6 +526,8 @@ class CachedCompanyClient:
     ) -> None:
         self.fetcher = fetcher
         self.providers = providers or []
+        self.search_companies: Callable[[str], list] | None = None
+        self.search_browser: Any | None = None
         self._cache: dict[str, CompanyData] = {}
         self._lock = threading.Lock()
 
@@ -551,6 +553,11 @@ class CachedCompanyClient:
                 continue
             seen.add(owner_id)
             close = getattr(owner, "close", None)
+            if callable(close):
+                close()
+        browser = self.search_browser
+        if browser is not None and id(browser) not in seen:
+            close = getattr(browser, "close", None)
             if callable(close):
                 close()
 
@@ -586,4 +593,7 @@ def build_company_client(
         if key in builders:
             providers.append((provider_labels.get(key, key), builders[key]()))
     multi_source = MultiSourceCompanyClient(providers=providers)
-    return CachedCompanyClient(multi_source.fetch_company, providers=providers)
+    client = CachedCompanyClient(multi_source.fetch_company, providers=providers)
+    client.search_companies = getattr(cnpjbiz_browser, "search_companies", None)
+    client.search_browser = cnpjbiz_browser
+    return client

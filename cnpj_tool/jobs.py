@@ -23,6 +23,14 @@ class Job:
     results: list[BatchResult] = field(default_factory=list)
     error: str = ""
     cancel_requested: bool = False
+    mode: str = "cnpj"
+    name_queries: list = field(default_factory=list)
+
+    def _name_queries_payload(self) -> list[dict]:
+        payload = []
+        for query in self.name_queries:
+            payload.append(query.to_dict() if hasattr(query, "to_dict") else dict(query))
+        return payload
 
     def to_dict(self) -> dict:
         return {
@@ -38,6 +46,9 @@ class Job:
             "results": [result.to_dict() for result in self.results],
             "error": self.error,
             "cancel_requested": self.cancel_requested,
+            "mode": self.mode,
+            "name_queries": self._name_queries_payload(),
+            "total_units": len(self.name_queries) if self.mode == "name" else len(self.input_cnpjs),
         }
 
 
@@ -55,6 +66,8 @@ class JobStore:
         filename: str = "",
         output_path: str = "",
         existing_results: list[BatchResult] | None = None,
+        mode: str = "cnpj",
+        name_queries: list | None = None,
     ) -> Job:
         job = Job(
             job_id=uuid.uuid4().hex,
@@ -64,8 +77,11 @@ class JobStore:
             filename=filename,
             output_path=output_path,
             results=list(existing_results or []),
+            mode=mode,
+            name_queries=list(name_queries or []),
         )
-        if existing_results and len(existing_results) == len(cnpjs):
+        total_units = len(job.name_queries) if mode == "name" else len(cnpjs)
+        if existing_results and total_units > 0 and len(existing_results) == total_units:
             job.status = "completed"
         with self._lock:
             self._jobs[job.job_id] = job
@@ -147,6 +163,59 @@ class JobStore:
                 results = processor(job.input_cnpjs)
             with self._lock:
                 job.results = results
+                job.status = "canceled" if job.cancel_requested else "completed"
+                job.updated_at = time.time()
+        except Exception as exc:
+            with self._lock:
+                job.error = str(exc)
+                job.status = "canceled" if job.cancel_requested else "failed"
+                job.updated_at = time.time()
+
+    def run_name(
+        self,
+        job_id: str,
+        processor: Callable[..., list[BatchResult]],
+        on_result: Callable[[BatchResult], None] | None = None,
+    ) -> None:
+        with self._lock:
+            job = self._jobs[job_id]
+            if job.status in {"completed", "canceled"} or job.cancel_requested:
+                job.status = "canceled" if job.cancel_requested else job.status
+                job.updated_at = time.time()
+                return
+            job.status = "running"
+            job.updated_at = time.time()
+
+        def _result_key(result: BatchResult) -> str:
+            meta = result.name_meta or {}
+            return str(meta.get("row_number", "") or meta.get("query_name", ""))
+
+        def _query_key(query) -> str:
+            return str(getattr(query, "row_number", 0) or getattr(query, "company_name", ""))
+
+        try:
+            order = [_query_key(query) for query in job.name_queries]
+            done_keys = {_result_key(result) for result in job.results}
+            pending = [query for query in job.name_queries if _query_key(query) not in done_keys]
+
+            def _should_stop() -> bool:
+                with self._lock:
+                    return self._jobs[job_id].cancel_requested
+
+            def _record_result(result: BatchResult) -> None:
+                with self._lock:
+                    by_key = {_result_key(item): item for item in job.results}
+                    by_key[_result_key(result)] = result
+                    job.results = [by_key[key] for key in order if key in by_key]
+                    job.updated_at = time.time()
+                if on_result:
+                    on_result(result)
+
+            try:
+                processor(pending, on_result=_record_result, should_stop=_should_stop)
+            except TypeError:
+                processor(pending)
+            with self._lock:
                 job.status = "canceled" if job.cancel_requested else "completed"
                 job.updated_at = time.time()
         except Exception as exc:

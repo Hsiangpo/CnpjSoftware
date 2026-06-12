@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from cnpj_tool.cf_bypass import BlurpathProxyConfig
 
 
@@ -395,3 +397,67 @@ def test_browser_client_close_releases_registered_browser_state(monkeypatch):
     client.close()
 
     assert closed == ["context", "browser", "playwright"]
+
+
+def test_browser_client_search_companies_parses_result_cards(monkeypatch):
+    import cnpj_tool.browser_scraper as browser_module
+
+    fixture = (Path(__file__).parent / "fixtures" / "cnpjbiz_procura_yazbek.html").read_text(encoding="utf-8")
+    visited = []
+
+    class FakePage:
+        def goto(self, url, wait_until, timeout):
+            visited.append(url)
+            return type("Response", (), {"status": 200})()
+
+        def content(self):
+            return fixture
+
+        def wait_for_timeout(self, timeout_ms):
+            return None
+
+        def close(self):
+            return None
+
+    class FakeContext:
+        def new_page(self):
+            return FakePage()
+
+        def close(self):
+            return None
+
+    class FakeBrowser:
+        def new_context(self, **kwargs):
+            return FakeContext()
+
+        def close(self):
+            return None
+
+    class FakeChromium:
+        def launch(self, **kwargs):
+            return FakeBrowser()
+
+    class FakePlaywright:
+        chromium = FakeChromium()
+
+        def stop(self):
+            return None
+
+    class FakeSyncPlaywright:
+        def start(self):
+            return FakePlaywright()
+
+    monkeypatch.setattr(browser_module, "sync_playwright", lambda: FakeSyncPlaywright())
+
+    client = browser_module.CnpjBizBrowserClient(
+        proxy_configs=[BlurpathProxyConfig(host="blurpath.net", port=15121, username="acct", password="secret")],
+        user_agent="Mozilla/5.0 Chrome/146",
+    )
+
+    results = client.search_companies("Yazbek")
+
+    assert visited == ["https://cnpj.biz/procura/Yazbek"]
+    assert len(results) == 13
+    assert results[0].cnpj == "05844915000105"
+    assert results[0].name == "Conbek - Construtora Yazbek LTDA"
+    assert results[0].status == "BAIXADA"

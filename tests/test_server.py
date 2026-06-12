@@ -1160,3 +1160,89 @@ def test_app_shutdown_closes_analyzer(tmp_path, monkeypatch):
         server_module.get_or_build_analyzer(client.app)
 
     assert closed == ["closed"]
+
+
+def test_directory_backed_name_job_writes_responsible_csv(tmp_path, monkeypatch):
+    input_dir = tmp_path / "cnpj"
+    output_dir = tmp_path / "output"
+    checkpoint_dir = tmp_path / "checkpoints"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    checkpoint_dir.mkdir()
+    csv_text = (
+        "法人,公司名称,公司网址,邮箱地址\n"
+        "Rita de Cassia Yazbek,Construtora R.Yazbek LTDA,http://www.ryazbek.com.br,ana@ryazbek.com.br\n"
+    )
+    (input_dir / "empresas.csv").write_bytes(csv_text.encode("gb18030"))
+    monkeypatch.setenv("CNPJ_TOOL_INPUT_DIR", str(input_dir))
+    monkeypatch.setenv("CNPJ_TOOL_OUTPUT_DIR", str(output_dir))
+    monkeypatch.setenv("CNPJ_TOOL_CHECKPOINT_DIR", str(checkpoint_dir))
+
+    class FakeNameAnalyzer:
+        def analyze_many_by_name(self, queries, on_result=None, should_stop=None):
+            results = []
+            for query in queries:
+                result = BatchResult(
+                    input_cnpj="22.779.678/0001-57",
+                    normalized_cnpj="22779678000157",
+                    status="success",
+                    company=CompanyData(
+                        cnpj="22779678000157",
+                        formatted_cnpj="22.779.678/0001-57",
+                        url="https://cnpj.biz/22779678000157",
+                        legal_name="Construtora R.yazbek LTDA",
+                    ),
+                    responsible=ResponsibleResult(
+                        names=["Rita de Cassia Yazbek"],
+                        role="Socio Ostensivo",
+                        confidence=0.9,
+                        reasoning="rule",
+                        analysis_source="rule_fallback",
+                    ),
+                    name_meta={
+                        "query_name": query.company_name,
+                        "row_number": query.row_number,
+                        "matched_cnpj": "22779678000157",
+                        "matched_company_name": "Construtora R.yazbek LTDA Scp3",
+                        "confidence": 0.91,
+                        "responsible_hint": query.responsible_hint,
+                        "website": query.website,
+                        "email": query.email,
+                    },
+                )
+                results.append(result)
+                if on_result:
+                    on_result(result)
+            return results
+
+    monkeypatch.setattr(server_module, "build_analyzer", lambda: FakeNameAnalyzer())
+
+    client = TestClient(create_app())
+    created = client.post("/api/jobs", json={"source_name": "empresas.csv"})
+
+    assert created.status_code == 200
+    payload = created.json()
+    assert payload["mode"] == "name"
+    assert payload["total_units"] == 1
+
+    job = client.get(f"/api/jobs/{payload['job_id']}").json()
+    assert job["status"] == "completed"
+    assert len(job["results"]) == 1
+    assert job["results"][0]["name_meta"]["query_name"] == "Construtora R.Yazbek LTDA"
+
+    output_path = Path(job["output_path"])
+    assert output_path.name == "empresas-responsaveis-nome.csv"
+    assert output_path.exists()
+    content = output_path.read_text(encoding="utf-8-sig")
+    assert "公司名称" in content
+    assert "Construtora R.Yazbek LTDA" in content
+    assert "Rita de Cassia Yazbek" in content
+    assert "22.779.678/0001-57" in content
+
+    files = client.get("/api/source-files").json()["files"]
+    record = next(item for item in files if item["name"] == "empresas.csv")
+    assert record["mode"] == "name"
+    assert record["count"] == 1
+    assert record["resume"]["total_count"] == 1
+    assert record["resume"]["done_count"] == 1
+    assert record["output_name"] == "empresas-responsaveis-nome.csv"

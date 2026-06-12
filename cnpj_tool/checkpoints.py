@@ -1,17 +1,18 @@
 from __future__ import annotations
 
+import csv
 import hashlib
 import json
 import threading
 import time
 import uuid
 from dataclasses import dataclass
-from io import BytesIO
+from io import BytesIO, StringIO
 from pathlib import Path
 
 from openpyxl import load_workbook
 
-from .cnpj import dedupe_preserve_order, normalize_cnpj
+from .cnpj import dedupe_preserve_order, format_cnpj, normalize_cnpj
 from .models import BatchResult, is_business_success
 
 
@@ -384,4 +385,134 @@ class CheckpointStore:
             self._write_bytes_atomic(output_path, content)
             return output_path
         self._write_bytes_atomic(output_path, self.build_summary_csv(results=results))
+        return output_path
+
+    # ---- name-search mode (company name -> responsible party) ----
+
+    @staticmethod
+    def _query_dict(query) -> dict:
+        if hasattr(query, "to_dict"):
+            return query.to_dict()
+        return dict(query or {})
+
+    @staticmethod
+    def _name_result_key(result: BatchResult) -> str:
+        meta = result.name_meta or {}
+        return str(meta.get("row_number", "") or meta.get("query_name", ""))
+
+    @staticmethod
+    def _name_query_key(query: dict) -> str:
+        return str(query.get("row_number", "") or query.get("company_name", ""))
+
+    def register_name_upload(
+        self,
+        *,
+        upload_id: str,
+        filename: str,
+        data: bytes,
+        name_queries: list,
+        source_type: str,
+    ) -> None:
+        payload = self._load_payload(upload_id) or {"upload_id": upload_id, "updated_at": 0.0}
+        payload["filename"] = filename
+        payload["mode"] = "name"
+        payload["source_type"] = source_type
+        payload["name_queries"] = [self._query_dict(query) for query in name_queries]
+        payload.setdefault("name_results", {})
+        payload["source_path"] = str(self._source_path(upload_id, filename))
+        payload["updated_at"] = time.time()
+        with self._lock:
+            self._source_path(upload_id, filename).write_bytes(data)
+            self._payload_cache[upload_id] = payload
+            self._write_text_atomic(self._path(upload_id), self._dump_payload(payload))
+
+    def upsert_name_result(
+        self,
+        *,
+        upload_id: str,
+        filename: str,
+        name_queries: list,
+        result: BatchResult,
+    ) -> None:
+        with self._lock:
+            payload = self._load_payload(upload_id)
+            if not payload:
+                payload = {
+                    "upload_id": upload_id,
+                    "filename": filename,
+                    "mode": "name",
+                    "name_queries": [self._query_dict(query) for query in name_queries],
+                    "updated_at": 0.0,
+                }
+            payload["filename"] = filename
+            payload["mode"] = "name"
+            if not payload.get("name_queries"):
+                payload["name_queries"] = [self._query_dict(query) for query in name_queries]
+            results = payload.setdefault("name_results", {})
+            results[self._name_result_key(result)] = result.to_dict()
+            payload["updated_at"] = time.time()
+            self._payload_cache[upload_id] = payload
+            self._write_text_atomic(self._path(upload_id), self._dump_payload(payload))
+
+    def load_name_results(self, upload_id: str) -> list[BatchResult]:
+        payload = self._load_payload(upload_id)
+        if not payload:
+            return []
+        stored = payload.get("name_results", {})
+        results: list[BatchResult] = []
+        for query in payload.get("name_queries", []):
+            key = self._name_query_key(query)
+            if key in stored:
+                results.append(BatchResult.from_dict(stored[key]))
+        return results
+
+    def get_name_progress_summary(self, upload_id: str) -> tuple[ResumeState, int, int]:
+        payload = self._load_payload(upload_id)
+        if not payload:
+            return ResumeState(upload_id, 0, 0, 0, False, 0.0), 0, 0
+        queries = payload.get("name_queries", [])
+        stored = payload.get("name_results", {})
+        total = len(queries)
+        done = sum(1 for query in queries if self._name_query_key(query) in stored)
+        normal = sum(1 for value in stored.values() if _is_business_success_payload(value))
+        abnormal = max(0, len(stored) - normal)
+        resume = ResumeState(
+            upload_id=upload_id,
+            done_count=done,
+            remaining_count=max(0, total - done),
+            total_count=total,
+            completed=total > 0 and done == total,
+            updated_at=float(payload.get("updated_at", 0.0)),
+        )
+        return resume, normal, abnormal
+
+    def build_name_summary_csv(self, *, results: list[BatchResult]) -> bytes:
+        buffer = StringIO()
+        writer = csv.writer(buffer)
+        writer.writerow(
+            ["公司名称", "匹配到的公司", "CNPJ", "法人(负责人)", "角色", "状态", "匹配度", "原表法人", "CNPJ链接"]
+        )
+        for item in results:
+            meta = item.name_meta or {}
+            responsible = item.responsible
+            cnpj = str(meta.get("matched_cnpj", "") or "")
+            formatted = format_cnpj(cnpj) if len(normalize_cnpj(cnpj)) == 14 else ""
+            confidence = meta.get("confidence", 0) or 0
+            writer.writerow(
+                [
+                    meta.get("query_name", ""),
+                    meta.get("matched_company_name", ""),
+                    formatted,
+                    "; ".join(responsible.names) if responsible else "",
+                    responsible.role if responsible else "",
+                    "success" if is_business_success(item) else item.status,
+                    f"{float(confidence):.2f}" if confidence else "",
+                    meta.get("responsible_hint", ""),
+                    (item.company.url if item.company else "") or (f"https://cnpj.biz/{cnpj}" if cnpj else ""),
+                ]
+            )
+        return ("﻿" + buffer.getvalue()).encode("utf-8")
+
+    def materialize_name_output(self, *, upload_id: str, output_path: Path, results: list[BatchResult]) -> Path:
+        self._write_bytes_atomic(output_path, self.build_name_summary_csv(results=results))
         return output_path

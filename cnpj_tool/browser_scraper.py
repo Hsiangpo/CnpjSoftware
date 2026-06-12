@@ -10,6 +10,8 @@ from playwright.sync_api import sync_playwright
 
 from .cf_bypass import BlurpathProxyConfig, build_playwright_proxy
 from .cnpj import normalize_cnpj, validate_cnpj
+from .name_search import CompanySearchResult, parse_search_results
+from .name_search import search_url as build_search_url
 from .parser import parse_company_page
 from .scraper import (
     CnpjBizBlockedError,
@@ -192,7 +194,9 @@ class CnpjBizBrowserClient:
                     pass
 
     def fetch_html(self, cnpj: str) -> str:
-        url = self.detail_url(cnpj)
+        return self._fetch_url_with_retry(self.detail_url(cnpj))
+
+    def _fetch_url_with_retry(self, url: str) -> str:
         last_error: Exception | None = None
         attempts = max(self.max_retries, len(self.proxy_configs) or 1)
         for attempt in range(attempts):
@@ -208,6 +212,19 @@ class CnpjBizBrowserClient:
         if isinstance(last_error, Exception):
             raise last_error
         raise CnpjBizError("Failed to fetch cnpj.biz page in browser")
+
+    def search_url(self, name: str) -> str:
+        return build_search_url(name)
+
+    def search_companies(self, name: str) -> list[CompanySearchResult]:
+        query = (name or "").strip()
+        if not query:
+            return []
+        try:
+            html = self._fetch_url_with_retry(self.search_url(query))
+        except CnpjBizNotFoundError:
+            return []
+        return parse_search_results(html)
 
     def fetch_company(self, cnpj: str):
         url = self.detail_url(cnpj)

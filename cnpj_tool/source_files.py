@@ -27,6 +27,7 @@ class SourceFileRecord:
     output_modified_at: float
     normal_count: int
     abnormal_count: int
+    mode: str = "cnpj"
 
     def to_dict(self) -> dict:
         return {
@@ -44,6 +45,7 @@ class SourceFileRecord:
             "output_modified_at": self.output_modified_at,
             "normal_count": self.normal_count,
             "abnormal_count": self.abnormal_count,
+            "mode": self.mode,
         }
 
 
@@ -75,27 +77,48 @@ def list_source_files(root: Path, checkpoints: CheckpointStore, output_root: Pat
             continue
         data = path.read_bytes()
         registered = checkpoints.find_registered_upload(filename=path.name, data=data)
-        if registered:
+        mode = "cnpj"
+        if registered and registered.get("mode") == "name":
+            mode = "name"
             upload_id = str(registered.get("upload_id", ""))
             source_type = str(registered.get("source_type", path.suffix.lower().lstrip(".")))
-            cnpjs = [str(item) for item in registered.get("raw_input_cnpjs", [])]
-            unique_cnpjs = [str(item) for item in registered.get("input_cnpjs", [])]
+            total_names = len(registered.get("name_queries", []))
+            count = total_names
+            unique_count = total_names
+        elif registered:
+            upload_id = str(registered.get("upload_id", ""))
+            source_type = str(registered.get("source_type", path.suffix.lower().lstrip(".")))
+            count = len(registered.get("raw_input_cnpjs", []))
+            unique_count = len(registered.get("input_cnpjs", []))
         else:
             details = parse_upload_details(path.name, data)
-            upload_id = checkpoints.build_upload_id(path.name, data, details.cnpjs)
+            mode = details.mode
             source_type = details.source_type
-            cnpjs = details.cnpjs
-            unique_cnpjs = list(dict.fromkeys(details.cnpjs))
-        resume_state, normal_count, abnormal_count = checkpoints.get_progress_summary(upload_id)
-        output_name = output_filename_for(path.name, source_type)
+            if mode == "name":
+                upload_id = checkpoints.build_upload_id(
+                    path.name, data, [query.company_name for query in details.name_queries]
+                )
+                count = len(details.name_queries)
+                unique_count = len({query.company_name for query in details.name_queries})
+            else:
+                upload_id = checkpoints.build_upload_id(path.name, data, details.cnpjs)
+                count = len(details.cnpjs)
+                unique_count = len(dict.fromkeys(details.cnpjs))
+        if mode == "name":
+            resume_state, normal_count, abnormal_count = checkpoints.get_name_progress_summary(upload_id)
+            output_name = output_filename_for(path.name, "name")
+        else:
+            resume_state, normal_count, abnormal_count = checkpoints.get_progress_summary(upload_id)
+            output_name = output_filename_for(path.name, source_type)
         output_path = output_root / output_name
         records.append(
             SourceFileRecord(
                 name=path.name,
                 path=path,
                 source_type=source_type,
-                count=len(cnpjs),
-                unique_count=len(unique_cnpjs),
+                mode=mode,
+                count=count,
+                unique_count=unique_count,
                 upload_id=upload_id,
                 size_bytes=path.stat().st_size,
                 modified_at=path.stat().st_mtime,
@@ -131,5 +154,7 @@ def output_filename_for(source_name: str, source_type: str) -> str:
     stem = Path(source_name).stem
     if source_type == "xlsx":
         return f"{stem}-responsaveis.xlsx"
+    if source_type == "name":
+        return f"{stem}-responsaveis-nome.csv"
     suffix = Path(source_name).suffix.lower().lstrip(".") or source_type
     return f"{stem}-{suffix}-responsaveis.csv"

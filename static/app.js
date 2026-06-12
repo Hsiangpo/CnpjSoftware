@@ -204,6 +204,17 @@ function syncRunButtons() {
 }
 
 function renderMetrics(job = state.lastJob) {
+  if (job && job.mode === "name") {
+    const results = Array.isArray(job.results) ? job.results : [];
+    const total = Number(job.total_units || results.length);
+    const completed = results.length;
+    const normal = results.filter((item) => isBusinessSuccess(item)).length;
+    els.inputCount.textContent = String(Math.max(0, total - completed));
+    els.doneCount.textContent = String(completed);
+    els.normalCount.textContent = String(normal);
+    els.issueCount.textContent = String(completed - normal);
+    return;
+  }
   if (job && Array.isArray(job.input_cnpjs)) {
     const results = Array.isArray(job.results) ? job.results : [];
     const uniqueResults = uniqueItemsByCnpj(results);
@@ -551,10 +562,15 @@ function renderResults(job) {
   if (job.output_path) {
     updateOutputHint(job.output_path);
   }
-  const rowTotal = job.input_cnpjs ? job.input_cnpjs.length : Math.max(allResults.length, 1);
+  const isNameMode = job.mode === "name";
+  const rowTotal = isNameMode
+    ? Number(job.total_units || allResults.length || 1)
+    : (job.input_cnpjs ? job.input_cnpjs.length : Math.max(allResults.length, 1));
   const rowCompleted = allResults.length;
-  const uniqueTotal = job.input_cnpjs ? uniqueInputCount(job.input_cnpjs) : Math.max(uniqueItemsByCnpj(allResults).length, 1);
-  const uniqueCompleted = uniqueItemsByCnpj(allResults).length;
+  const uniqueTotal = isNameMode
+    ? rowTotal
+    : (job.input_cnpjs ? uniqueInputCount(job.input_cnpjs) : Math.max(uniqueItemsByCnpj(allResults).length, 1));
+  const uniqueCompleted = isNameMode ? allResults.length : uniqueItemsByCnpj(allResults).length;
   const progressTotal = Math.max(uniqueTotal, 1);
   els.progressBar.style.width = `${Math.min(100, Math.round((uniqueCompleted / progressTotal) * 100))}%`;
   if (uniqueTotal !== rowTotal) {
@@ -594,9 +610,12 @@ function renderResults(job) {
   els.resultBody.innerHTML = visibleResults.map((item) => {
     const company = item.company || {};
     const responsible = item.responsible || {};
+    const meta = item.name_meta || {};
+    const isNameRow = Boolean(meta.query_name);
     const names = (responsible.names || []).join("; ");
-    const companyName = company.trade_name || company.legal_name || "";
-    const url = company.url || `https://cnpj.biz/${item.normalized_cnpj}`;
+    const matchedCnpj = meta.matched_cnpj || item.normalized_cnpj || "";
+    const companyName = (isNameRow ? meta.matched_company_name : "") || company.trade_name || company.legal_name || "";
+    const url = company.url || (matchedCnpj ? `https://cnpj.biz/${matchedCnpj}` : "");
     const businessSuccess = isBusinessSuccess(item);
     const displayStatus = businessSuccess ? "success" : item.status;
     const issueText = businessSuccess ? "" : (item.error || "");
@@ -606,18 +625,25 @@ function renderResults(job) {
     const fetchMeta = company.source_provider
       ? `<div style="margin-top:4px;color:var(--text-muted);font-size:12px;">${escapeHtml(company.source_provider)}${company.source_proxy_port ? ` · port ${escapeHtml(company.source_proxy_port)}` : ""}</div>`
       : "";
-      
+
     let statusClass = "status-neutral";
     if(businessSuccess) statusClass = "status-success";
     if(!businessSuccess && (item.status === "partial_success" || item.status === "blocked_by_cloudflare")) statusClass = "status-warning";
     if(item.status === "failed" || item.status === "fetch_error" || item.status === "not_found") statusClass = "status-danger";
-    const retryAction = businessSuccess
+    const retryAction = (businessSuccess || isNameRow)
       ? ""
       : `<div style="margin-top:8px;"><button class="btn btn-secondary btn-xs retry-single-button" data-cnpj="${escapeHtml(item.normalized_cnpj || item.input_cnpj || "")}" type="button">重跑本条</button></div>`;
 
+    const firstCell = isNameRow
+      ? `<div style="font-weight:500;">${escapeHtml(meta.query_name)}</div>` +
+        (matchedCnpj
+          ? `<div style="margin-top:4px;font-size:12px;"><a href="${escapeHtml(url)}" target="_blank" rel="noreferrer">${escapeHtml(item.input_cnpj || matchedCnpj)}</a></div>`
+          : `<div style="margin-top:4px;font-size:12px;color:var(--text-muted);">未匹配到公司</div>`)
+      : `<a href="${escapeHtml(url)}" target="_blank" rel="noreferrer">${escapeHtml(item.input_cnpj || item.normalized_cnpj)}</a>`;
+
     return `
       <tr>
-        <td><a href="${escapeHtml(url)}" target="_blank" rel="noreferrer">${escapeHtml(item.input_cnpj || item.normalized_cnpj)}</a></td>
+        <td>${firstCell}</td>
         <td>
           <div style="font-weight:500;">${escapeHtml(companyName)}</div>
           <div style="color:var(--text-muted);font-size:12px;margin-top:4px;">${escapeHtml(company.city || "")}${company.state ? " / " + escapeHtml(company.state) : ""}</div>

@@ -123,6 +123,7 @@ console.log(JSON.stringify({{ startDisabled: elements.startButton.disabled, retr
         ["node", "-e", harness],
         cwd=ROOT,
         text=True,
+        encoding="utf-8",
         capture_output=True,
         check=True,
     )
@@ -222,6 +223,7 @@ console.log(JSON.stringify({{
         ["node", "-e", harness],
         cwd=ROOT,
         text=True,
+        encoding="utf-8",
         capture_output=True,
         check=True,
     )
@@ -337,6 +339,7 @@ console.log(JSON.stringify({{
         ["node", "-e", harness],
         cwd=ROOT,
         text=True,
+        encoding="utf-8",
         capture_output=True,
         check=True,
     )
@@ -408,6 +411,7 @@ console.log(JSON.stringify({{
         ["node", "-e", harness],
         cwd=ROOT,
         text=True,
+        encoding="utf-8",
         capture_output=True,
         check=True,
     )
@@ -492,6 +496,7 @@ console.log(JSON.stringify({{
         ["node", "-e", harness],
         cwd=ROOT,
         text=True,
+        encoding="utf-8",
         capture_output=True,
         check=True,
     )
@@ -565,6 +570,7 @@ vm.runInContext(script + "\\nglobalThis.__uiTest = {{ startAdhocRetryJob }};", c
         ["node", "-e", harness],
         cwd=ROOT,
         text=True,
+        encoding="utf-8",
         capture_output=True,
         check=True,
     )
@@ -641,6 +647,7 @@ context.__uiTest.state.jobId = "job-parent";
         ["node", "-e", harness],
         cwd=ROOT,
         text=True,
+        encoding="utf-8",
         capture_output=True,
         check=True,
     )
@@ -720,6 +727,7 @@ console.log(JSON.stringify({{ round1, round3, round4 }}));
         ["node", "-e", harness],
         cwd=ROOT,
         text=True,
+        encoding="utf-8",
         capture_output=True,
         check=True,
     )
@@ -789,6 +797,7 @@ console.log(JSON.stringify(context.__uiTest.state.sourceQueue));
         ["node", "-e", harness],
         cwd=ROOT,
         text=True,
+        encoding="utf-8",
         capture_output=True,
         check=True,
     )

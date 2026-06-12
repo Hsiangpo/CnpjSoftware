@@ -87,6 +87,7 @@ def build_analyzer() -> CompanyAnalyzer:
         analyze_with_llm=llm_client.analyze_company if llm_client else None,
         request_delay_seconds=settings.cnpj_biz_request_delay_seconds,
         max_concurrency=settings.system_concurrency,
+        search_companies=getattr(company_client, "search_companies", None),
     )
 
 
@@ -482,6 +483,61 @@ def create_app(auto_run_jobs: bool = True) -> FastAPI:
         app.state.jobs.run(job_id, analyzer.analyze_many, on_result=persist_result)
         materialize_current_output(force=True)
 
+    def run_name_job(job_id: str) -> None:
+        analyzer = get_or_build_analyzer(app)
+        job = app.state.jobs.get(job_id)
+        settings = load_settings()
+        flush_batch_size = settings.output_flush_batch_size
+        flush_interval_seconds = settings.output_flush_interval_seconds
+        pending_flush_count = 0
+        last_flush_at = time.monotonic()
+        has_materialized_output = bool(job.output_path and Path(job.output_path).exists())
+
+        def materialize_current_output(*, force: bool = False) -> None:
+            nonlocal has_materialized_output, last_flush_at, pending_flush_count
+            now = time.monotonic()
+            if (
+                not force
+                and has_materialized_output
+                and pending_flush_count < flush_batch_size
+                and now - last_flush_at < flush_interval_seconds
+            ):
+                return
+            current_job = app.state.jobs.get(job_id)
+            if not current_job.upload_id or not current_job.output_path:
+                return
+            full_results = get_checkpoint_store(app).load_name_results(current_job.upload_id)
+            if not full_results:
+                return
+            output_path = get_checkpoint_store(app).materialize_name_output(
+                upload_id=current_job.upload_id,
+                output_path=Path(current_job.output_path),
+                results=full_results,
+            )
+            app.state.jobs.set_output_path(job_id, str(output_path))
+            has_materialized_output = True
+            last_flush_at = time.monotonic()
+            pending_flush_count = 0
+
+        def persist_result(result: BatchResult) -> None:
+            nonlocal pending_flush_count
+            if not job.upload_id:
+                return
+            get_checkpoint_store(app).upsert_name_result(
+                upload_id=job.upload_id,
+                filename=job.filename or "upload",
+                name_queries=job.name_queries,
+                result=result,
+            )
+            pending_flush_count += 1
+            try:
+                materialize_current_output(force=not has_materialized_output)
+            except Exception:
+                pass
+
+        app.state.jobs.run_name(job_id, analyzer.analyze_many_by_name, on_result=persist_result)
+        materialize_current_output(force=True)
+
     @app.post("/api/jobs")
     def create_job(request: JobRequest, background_tasks: BackgroundTasks) -> dict[str, Any]:
         settings = load_settings()
@@ -497,6 +553,34 @@ def create_app(auto_run_jobs: bool = True) -> FastAPI:
                 raise HTTPException(status_code=404, detail="Source file not found") from exc
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
+            if details.mode == "name":
+                if not details.name_queries:
+                    raise HTTPException(status_code=400, detail="No company names found in file")
+                upload_id = get_checkpoint_store(app).build_upload_id(
+                    path.name, data, [query.company_name for query in details.name_queries]
+                )
+                get_checkpoint_store(app).register_name_upload(
+                    upload_id=upload_id,
+                    filename=path.name,
+                    data=data,
+                    name_queries=details.name_queries,
+                    source_type=details.source_type,
+                )
+                existing_results = get_checkpoint_store(app).load_name_results(upload_id)
+                output_path = str(settings.output_dir / output_filename_for(path.name, "name"))
+                name_job = app.state.jobs.create(
+                    [],
+                    upload_id=upload_id,
+                    source_name=source_name,
+                    filename=path.name,
+                    output_path=output_path,
+                    existing_results=existing_results,
+                    mode="name",
+                    name_queries=details.name_queries,
+                )
+                if auto_run_jobs:
+                    background_tasks.add_task(run_name_job, name_job.job_id)
+                return name_job.to_dict()
             cnpjs = details.cnpjs
             upload_id = get_checkpoint_store(app).build_upload_id(path.name, data, details.cnpjs)
             get_checkpoint_store(app).register_upload(
