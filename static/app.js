@@ -201,7 +201,7 @@ function syncRunButtons() {
   els.clearButton.disabled = active;
   els.queueSourceButton.disabled = active || !state.selectedSourceName;
   els.copyFailedButton.disabled = nameMode || !hardFailedResults().length;
-  els.runFailedButton.disabled = nameMode || active || !state.jobId || !isJobTerminal() || !abnormalResults().length;
+  els.runFailedButton.disabled = active || !state.jobId || !isJobTerminal() || !abnormalResults().length;
 }
 
 function renderMetrics(job = state.lastJob) {

@@ -915,6 +915,100 @@ def test_source_file_summary_clears_abnormal_after_successful_retry(tmp_path, mo
     assert retry_again.json()["detail"] == "This job has no failed CNPJ values"
 
 
+def test_retry_failed_endpoint_reruns_only_failed_name_rows(tmp_path, monkeypatch):
+    input_dir = tmp_path / "cnpj"
+    output_dir = tmp_path / "output"
+    checkpoint_dir = tmp_path / "checkpoints"
+    for directory in (input_dir, output_dir, checkpoint_dir):
+        directory.mkdir()
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "lote"
+    sheet.append(["公司名称"])
+    sheet.append(["Empresa Boa"])
+    sheet.append(["Empresa Ruim"])
+    source_path = input_dir / "nomes.xlsx"
+    workbook.save(source_path)
+    workbook.close()
+    monkeypatch.setenv("CNPJ_TOOL_INPUT_DIR", str(input_dir))
+    monkeypatch.setenv("CNPJ_TOOL_OUTPUT_DIR", str(output_dir))
+    monkeypatch.setenv("CNPJ_TOOL_CHECKPOINT_DIR", str(checkpoint_dir))
+
+    class FakeAnalyzer:
+        def __init__(self):
+            self.batches = []
+
+        def _result(self, query, ok):
+            meta = {
+                "query_name": query.company_name,
+                "row_number": query.row_number,
+                "matched_cnpj": "03541629000131" if ok else "",
+                "matched_company_name": query.company_name if ok else "",
+                "confidence": 0.9 if ok else 0.0,
+            }
+            if not ok:
+                return BatchResult(
+                    input_cnpj="", normalized_cnpj="", status="not_found",
+                    error="Busca sem resultados", name_meta=meta,
+                )
+            return BatchResult(
+                input_cnpj="", normalized_cnpj="03541629000131", status="success",
+                company=CompanyData(
+                    cnpj="03541629000131", formatted_cnpj="", url="",
+                    legal_name=query.company_name,
+                ),
+                responsible=ResponsibleResult(
+                    names=["Maria Teste"], role="Administrador", confidence=0.9,
+                    reasoning="rule", analysis_source="llm",
+                ),
+                name_meta=meta,
+            )
+
+        def analyze_many_by_name(self, queries, on_result=None, should_stop=None):
+            self.batches.append([query.company_name for query in queries])
+            results = []
+            for query in queries:
+                # "Empresa Ruim" fails the first time, then succeeds on retry.
+                ok = query.company_name != "Empresa Ruim" or len(self.batches) > 1
+                result = self._result(query, ok)
+                results.append(result)
+                if on_result:
+                    on_result(result)
+            return results
+
+    analyzer = FakeAnalyzer()
+    monkeypatch.setattr(server_module, "build_analyzer", lambda: analyzer)
+
+    client = TestClient(create_app())
+    first = client.post("/api/jobs", json={"source_name": "nomes.xlsx"})
+    assert first.status_code == 200
+    original_job_id = first.json()["job_id"]
+    first_job = client.get(f"/api/jobs/{original_job_id}").json()
+    assert first_job["status"] == "completed"
+    assert first_job["mode"] == "name"
+    assert analyzer.batches[0] == ["Empresa Boa", "Empresa Ruim"]
+
+    summary_after_fail = client.get("/api/source-files").json()["files"][0]
+    assert summary_after_fail["abnormal_count"] == 1
+    assert summary_after_fail["normal_count"] == 1
+
+    retry = client.post(f"/api/jobs/{original_job_id}/retry-failed")
+    assert retry.status_code == 200
+    retry_job_id = retry.json()["job_id"]
+    retried_job = client.get(f"/api/jobs/{retry_job_id}").json()
+    assert retried_job["status"] == "completed"
+    # Only the previously-failed row is re-run; the success is preserved.
+    assert analyzer.batches[1] == ["Empresa Ruim"]
+
+    summary_after_retry = client.get("/api/source-files").json()["files"][0]
+    assert summary_after_retry["abnormal_count"] == 0
+    assert summary_after_retry["normal_count"] == 2
+
+    retry_again = client.post(f"/api/jobs/{original_job_id}/retry-failed")
+    assert retry_again.status_code == 400
+    assert retry_again.json()["detail"] == "没有需要重跑的失败行"
+
+
 def test_settings_endpoint_updates_env_backed_runtime_settings(tmp_path, monkeypatch):
     env_path = tmp_path / ".env"
     env_path.write_text(

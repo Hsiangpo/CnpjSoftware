@@ -635,6 +635,32 @@ def create_app(auto_run_jobs: bool = True) -> FastAPI:
             original = app.state.jobs.get(job_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="Job not found") from exc
+        if original.mode == "name":
+            name_results = (
+                get_checkpoint_store(app).load_name_results(original.upload_id)
+                if original.upload_id
+                else original.results
+            )
+            successes = [item for item in name_results if is_business_success(item)]
+            if len(successes) >= len(name_results):
+                raise HTTPException(status_code=400, detail="没有需要重跑的失败行")
+            # Re-run in place: seed the job with the successes so resume treats
+            # only the previously-failed rows as pending, then merge back into
+            # the same output file. Genuine "not found" rows will fail again;
+            # transient (proxy/Cloudflare) failures get another chance.
+            retry_job = app.state.jobs.create(
+                [],
+                upload_id=original.upload_id,
+                source_name=original.source_name,
+                filename=original.filename or original.source_name,
+                output_path=original.output_path,
+                existing_results=successes,
+                mode="name",
+                name_queries=original.name_queries,
+            )
+            if auto_run_jobs:
+                background_tasks.add_task(run_name_job, retry_job.job_id)
+            return retry_job.to_dict()
         source_results = (
             get_checkpoint_store(app).load_results(original.upload_id)
             if original.upload_id
