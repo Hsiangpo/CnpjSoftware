@@ -81,7 +81,13 @@ def build_analyzer() -> CompanyAnalyzer:
             fallback_models=settings.llm_fallback_models,
             timeout_seconds=settings.llm_timeout_seconds,
         )
-        llm_client.preflight(chat_timeout_seconds=min(settings.llm_timeout_seconds, 6))
+        # Warm up model selection up front, but never let one slow probe disable
+        # the whole run: a reasoning model can take longer than a few seconds to
+        # answer even a ping, and the old 6s cap timed out and latched the LLM
+        # off for every row. analyze_company retries the probe lazily under a
+        # lock, so clear any transient failure here.
+        if not llm_client.preflight(chat_timeout_seconds=settings.llm_timeout_seconds):
+            llm_client.disabled_error = ""
     return CompanyAnalyzer(
         fetch_company=company_client.fetch_company,
         analyze_with_llm=llm_client.analyze_company if llm_client else None,
