@@ -40,6 +40,7 @@ class LLMClient:
         self.selected_base_url: str | None = None
         self.selected_model: str | None = None
         self.disabled_error: str = ""
+        self._model_lock = threading.Lock()
 
     def _get_session(self):
         if not isinstance(self.session, self._session_type):
@@ -202,8 +203,19 @@ class LLMClient:
             raise ValueError(self.disabled_error)
         if not self.api_key:
             raise ValueError("LLM_API_KEY is missing")
-        if not self.selected_model and not self.preflight(chat_timeout_seconds=min(self.timeout_seconds, 6)):
-            raise ValueError(self.disabled_error or "No working LLM model is available")
+        if not self.selected_model:
+            # Probe for a usable model once, under a lock. A reasoning model is
+            # slow to answer even a ping, so several worker threads probing at
+            # once would pile onto the endpoint and blow past a short timeout —
+            # and the first such failure then disabled the LLM for the whole
+            # run. One serialized probe with the full timeout avoids both traps.
+            with self._model_lock:
+                if self.disabled_error:
+                    raise ValueError(self.disabled_error)
+                if not self.selected_model and not self.preflight(
+                    chat_timeout_seconds=self.timeout_seconds
+                ):
+                    raise ValueError(self.disabled_error or "No working LLM model is available")
 
         response = self._analyze_with_retries(company)
         if response.status_code >= 400:

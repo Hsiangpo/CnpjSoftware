@@ -197,3 +197,45 @@ def test_llm_client_retries_analysis_after_transient_failure():
     assert result.analysis_source == "llm"
     assert result.model_used == "primary-model"
     assert client.session.post_calls == 3
+
+
+def test_analyze_company_probes_model_with_full_timeout():
+    """The model probe must use the full timeout, not the old 6s cap.
+
+    Reasoning models are slow to answer even a ping, and under concurrency the
+    probes pile up and exceed a short timeout — which then disabled the LLM for
+    the whole run. The probe must get the configured timeout.
+    """
+
+    class RecordingSession:
+        def __init__(self):
+            self.post_timeouts: list[float] = []
+
+        def get(self, *_args, **_kwargs):
+            return FakeResponse(200, {"data": []})
+
+        def post(self, *_args, **kwargs):
+            self.post_timeouts.append(kwargs.get("timeout"))
+            return FakeResponse(
+                200,
+                {"choices": [{"message": {"content": '{"names":["Ana"],"role":"Diretor","confidence":0.9}'}}]},
+            )
+
+    client = LLMClient(
+        api_key="sk-test",
+        base_urls=["https://api.example.test/v1"],
+        model="demo-model",
+        timeout_seconds=30,
+    )
+    client.session = RecordingSession()
+
+    client.analyze_company(
+        CompanyData(
+            cnpj="03541629000137",
+            formatted_cnpj="03.541.629/0001-37",
+            url="https://cnpj.biz/03541629000137",
+        )
+    )
+
+    # First POST is the preflight probe — it must get the full 30s, not 6s.
+    assert client.session.post_timeouts[0] == 30
