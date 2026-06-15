@@ -624,9 +624,8 @@ function renderResults(job) {
     const businessSuccess = isBusinessSuccess(item);
     const displayStatus = businessSuccess ? "success" : item.status;
     const issueText = businessSuccess ? "" : (item.error || "");
-    const analysisMeta = responsible.analysis_source
-      ? `<div class="status-meta">${escapeHtml(responsible.analysis_source)}${responsible.model_used ? ` · ${escapeHtml(responsible.model_used)}` : ""}</div>`
-      : "";
+    // LLM is disabled (rule-based ranking only); the analysis-source label is hidden.
+    const analysisMeta = "";
     const fetchMeta = company.source_provider
       ? `<div style="margin-top:4px;color:var(--text-muted);font-size:12px;">${escapeHtml(company.source_provider)}${company.source_proxy_port ? ` · port ${escapeHtml(company.source_proxy_port)}` : ""}</div>`
       : "";
@@ -678,9 +677,9 @@ async function loadHealth() {
     state.health = data;
     const proxy = data.browser_proxy || {};
     const ports = Array.isArray(proxy.ports) && proxy.ports.length ? `:${proxy.ports.join("/")}` : "";
-    els.apiBadge.textContent = data.has_llm_key ? `已配置 · ${data.system_concurrency}并发 · ${ports}` : "缺少 AI Key";
+    els.apiBadge.textContent = `就绪 · ${data.system_concurrency}并发 · ${ports}`;
     const dot = document.getElementById("apiBadgeDot");
-    if(dot) dot.className = data.has_llm_key ? "status-dot active" : "status-dot warn";
+    if(dot) dot.className = "status-dot active";
     els.blurpathStatus.textContent = data.blurpath_proxy_configured ? `已配置 · ${proxy.ports.join("/")}` : "未配置";
     renderGuard();
   } catch {

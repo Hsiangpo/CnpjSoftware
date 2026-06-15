@@ -73,7 +73,7 @@ def build_analyzer() -> CompanyAnalyzer:
         cnpj_biz_user_agent=settings.cnpj_biz_user_agent,
     )
     llm_client = None
-    if settings.llm_api_key:
+    if settings.llm_api_key and settings.llm_enabled:
         llm_client = LLMClient(
             api_key=settings.llm_api_key,
             base_urls=settings.llm_base_urls,

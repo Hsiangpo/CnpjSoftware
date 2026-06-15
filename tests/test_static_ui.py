@@ -132,7 +132,7 @@ console.log(JSON.stringify({{ startDisabled: elements.startButton.disabled, retr
     assert payload == {"startDisabled": True, "retryDisabled": True}
 
 
-def test_render_results_updates_metrics_and_analysis_meta_without_reasoning_text():
+def test_render_results_updates_metrics_and_hides_analysis_meta():
     script = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
     ids = sorted(set(re.findall(r'getElementById\("([^"]+)"\)', script)) | {"jobPulseDot", "apiBadgeDot"})
     harness = f"""
@@ -233,8 +233,10 @@ console.log(JSON.stringify({{
     assert payload["completed"] == "3"
     assert payload["normal"] == "2"
     assert payload["abnormal"] == "1"
-    assert "gpt-5.4-mini" in payload["html"]
-    assert "rule_fallback" in payload["html"]
+    # LLM is disabled (rule-based ranking only): the analysis-source/model meta is hidden.
+    assert "gpt-5.4-mini" not in payload["html"]
+    assert "rule_fallback" not in payload["html"]
+    assert "status-meta" not in payload["html"]
     assert 'class="reason-text">fallback<' not in payload["html"]
     assert 'class="reason-text">ok<' not in payload["html"]
 

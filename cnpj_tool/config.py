@@ -212,6 +212,9 @@ class Settings:
     output_dir: Path
     output_flush_batch_size: int
     output_flush_interval_seconds: float
+    # Off by default: the role-hierarchy rules are sufficient for this data, so
+    # the LLM path stays in the code but disabled. Set LLM_ENABLED=true to use it.
+    llm_enabled: bool = False
 
     @property
     def blurpath_proxy_configured(self) -> bool:
@@ -259,6 +262,7 @@ def load_settings() -> Settings:
         llm_model=os.getenv("LLM_MODEL", DEFAULT_MODEL).strip() or DEFAULT_MODEL,
         llm_fallback_models=_parse_csv_env("LLM_FALLBACK_MODELS", []),
         llm_timeout_seconds=float(os.getenv("LLM_TIMEOUT_SECONDS", "30")),
+        llm_enabled=os.getenv("LLM_ENABLED", "false").strip().casefold() in {"1", "true", "yes", "on"},
         system_concurrency=max(1, int(os.getenv("SYSTEM_CONCURRENCY", str(DEFAULT_SYSTEM_CONCURRENCY)) or DEFAULT_SYSTEM_CONCURRENCY)),
         cnpj_provider_order=[item.casefold() for item in _parse_csv_env("CNPJ_PROVIDER_ORDER", DEFAULT_PROVIDER_ORDER)],
         cnpj_biz_request_delay_seconds=float(os.getenv("CNPJ_BIZ_REQUEST_DELAY_SECONDS", "0")),

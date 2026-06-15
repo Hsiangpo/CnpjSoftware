@@ -32,11 +32,12 @@
           <div class="section-header">
             <h2>运行设置</h2>
           </div>
-          <div class="form-group">
+          <!-- LLM 已停用（改走规则排序）；保留输入元素以兼容脚本，仅隐藏 -->
+          <div class="form-group" style="display:none">
             <label for="apiKeyInput">API Key</label>
             <input id="apiKeyInput" type="password" autocomplete="off" class="input-dark" />
           </div>
-          <div class="form-group">
+          <div class="form-group" style="display:none">
             <label for="modelInput">模型</label>
             <input id="modelInput" type="text" class="input-dark" />
           </div>
@@ -306,7 +307,7 @@
         </div>
       </main>
     </div>
-    <script src="/static/app.js?v=20260613d"></script>
+    <script src="/static/app.js?v=20260616a"></script>
     <script>
       if (window.lucide) {
         lucide.createIcons();
